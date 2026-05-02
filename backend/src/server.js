@@ -229,9 +229,9 @@ app.get('/api/users', (req, res) => {
 
 // Get all folders with file counts (supports userId filter)
 app.get('/api/folders', (req, res) => {
-    const userId = req.query.userId;
     db.all(`
         SELECT f.*, 
+               f.parent_id,
                COUNT(fl.id) as file_count,
                COALESCE(SUM(fl.size_bytes), 0) as used
         FROM folders f
@@ -239,7 +239,9 @@ app.get('/api/folders', (req, res) => {
         GROUP BY f.id
     `, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ folders: rows });
+        // Ensure parent_id is included
+        const folders = rows.map(f => ({ ...f, parentId: f.parent_id || null }));
+        res.json({ folders });
     });
 });
 
@@ -412,17 +414,21 @@ app.get('/api/activities', (req, res) => {
 
 // Create folder
 app.post('/api/folders', (req, res) => {
-    const { name, color, icon, quota } = req.body;
+    const { name, color, icon, quota, parentId, parent_id } = req.body;
+    const pId = parentId || parent_id || null;
+    
+    // Add parent_id column if not exists
+    db.run(`ALTER TABLE folders ADD COLUMN parent_id INTEGER`, () => {});
     
     db.run(`
-        INSERT INTO folders (name, color, icon, quota)
-        VALUES (?, ?, ?, ?)
-    `, [name, color || '#3B82F6', icon || '📁', quota || 5368709120], function(err) {
+        INSERT INTO folders (name, color, icon, quota, parent_id)
+        VALUES (?, ?, ?, ?, ?)
+    `, [name, color || '#3B82F6', icon || '📁', quota || 5368709120, pId], function(err) {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
         }
-        res.json({ id: this.lastID, name, color, icon, quota, used: 0 });
+        res.json({ id: this.lastID, name, color, icon, quota, parent_id: pId, parentId: pId, used: 0 });
     });
 });
 
