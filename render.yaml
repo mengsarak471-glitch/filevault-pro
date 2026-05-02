@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: filevault-pro-backend
+    env: node
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && npm start
+    envVars:
+      - key: MONGODB_URI
+        scope: run
+        sync: false
+      - key: JWT_SECRET
+        scope: run
+        sync: false
+      - key: FRONTEND_URL
+        value: https://filevault-pro.vercel.app
+      - key: NODE_ENV
+        value: production
+
+  - type: web
+    name: filevault-pro-frontend
+    env: node
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build
+    startCommand: cd frontend && npm run preview

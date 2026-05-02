@@ -1,0 +1,1338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FileVault Pro - User Isolated</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Times+New+Roman&display=swap" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Battambang:wght@400;700&display=swap');
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        .font-kh { font-family: 'Battambang', 'Khmer OS Siemreap', serif !important; }
+        .font-en { font-family: 'Times New Roman', Times, serif !important; }
+        body { font-family: 'Times New Roman', serif; }
+        .smooth { transition: all 0.3s ease-in-out; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { animation: fadeIn 0.25s ease forwards; }
+        @keyframes pulse-red { 0%,100%{opacity:1} 50%{opacity:0.5} }
+        .locked-badge { animation: pulse-red 2s infinite; }
+        .thumbnail-img { width: 100%; height: 80px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; }
+        .thumbnail-vid { width: 100%; height: 80px; object-fit: cover; border-radius: 8px; margin-bottom: 8px; background:#000; }
+        input[type=file] { display:none; }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ========== TRANSLATIONS ==========
+const T = {
+  en: {
+    appName: 'FileVault Pro',
+    login: 'Sign In', logout: 'Logout', username: 'Username', password: 'Password',
+    dashboard: 'Dashboard', favorites: 'Favorites', allFiles: 'All Files',
+    recent: 'Recent', trash: 'Trash', users: 'Users', activityLog: 'Activity Log',
+    downloads: 'Downloads', videos: 'Videos', pictures: 'Pictures',
+    newFolder: 'New Folder', upload: 'Upload Files', search: 'Search files...',
+    createFolder: 'Create Folder', folderName: 'Folder Name', cancel: 'Cancel', save: 'Save',
+    delete: 'Delete', restore: 'Restore', preview: 'Preview', share: 'Share',
+    rename: 'Rename', lock: 'Lock', unlock: 'Unlock', download: 'Download',
+    editProfile: 'Edit Profile', changePhoto: 'Change Photo',
+    privateFile: 'Private File', enterPin: 'Enter PIN to unlock',
+    wrongPin: 'Wrong PIN!', setPin: 'Set PIN (4 digits)',
+    confirmDelete: 'Move to Trash?', confirmSave: 'Name already exists! Save anyway?',
+    daysLeft: 'days left', totalFiles: 'Total Files', folders: 'Folders',
+    noFiles: 'No files found', dropFiles: 'Drop files here or click to browse',
+    language: 'Language', darkMode: 'Dark Mode',
+    backNav: 'Back', forwardNav: 'Forward', upNav: 'Up',
+    subFolder: 'Create Sub-Folder', trashInfo: 'Files deleted less than 30 days ago',
+    pinProtect: 'PIN Protect', activity: 'Activity', size: 'Size', date: 'Date',
+    type: 'Type', name: 'Name', version: 'Version', uploadedBy: 'Uploaded By',
+    admin: 'Admin', user: 'User', all: 'All', pdf: 'PDF', document: 'Document',
+    image: 'Image', video: 'Video', myData: 'My Data', systemUsers: 'System Users',
+  },
+  kh: {
+    appName: 'ហ្វាយវ៉ូល ប្រូ',
+    login: 'ចូលប្រើ', logout: 'ចាកចេញ', username: 'ឈ្មោះប្រើ', password: 'លេខសម្ងាត់',
+    dashboard: 'ផ្ទាំងគ្រប់គ្រង', favorites: 'ចំណូលចិត្ត', allFiles: 'ឯកសារទាំងអស់',
+    recent: 'ថ្មីៗ', trash: 'ធុងសំរាម', users: 'អ្នកប្រើ', activityLog: 'កំណត់ហេតុ',
+    downloads: 'ទាញយក', videos: 'វីដេអូ', pictures: 'រូបភាព',
+    newFolder: 'ថត​ថ្មី', upload: 'បញ្ចូលឯកសារ', search: 'ស្វែងរកឯកសារ...',
+    createFolder: 'បង្កើតថត', folderName: 'ឈ្មោះថត', cancel: 'បោះបង់', save: 'រក្សាទុក',
+    delete: 'លុប', restore: 'ស្ដារ', preview: 'មើល', share: 'ចែករំលែក',
+    rename: 'ប្ដូរឈ្មោះ', lock: 'ចាក់សោ', unlock: 'ដោះសោ', download: 'ទាញយក',
+    editProfile: 'កែប្រែប្រវត្តិ', changePhoto: 'ផ្លាស់ប្ដូររូបថត',
+    privateFile: 'ឯកសារឯកជន', enterPin: 'វាយ PIN ដើម្បីបើក',
+    wrongPin: 'PIN មិនត្រូវ!', setPin: 'កំណត់ PIN (លេខ​៤​ខ្ទង់)',
+    confirmDelete: 'ផ្ដើररំលំ​ទៅ​ធុងសំរាម?', confirmSave: 'ឈ្មោះ​នេះ​មានរួចហើយ! រក្សាទុកដដែលទេ?',
+    daysLeft: 'ថ្ងៃ​នៅ​សល់', totalFiles: 'ឯកសារ​សរុប', folders: 'ថត',
+    noFiles: 'រក​មិន​ឃើញ​ឯកសារ', dropFiles: 'ទម��លាក់​ឯកសារ​ឬ​ចុច​ដើម្បី​ជ្រើស',
+    language: 'ភាសា', darkMode: 'មុខ​ងងឹត',
+    backNav: 'ថយ​ក្រោយ', forwardNav: 'ទៅ​មុខ', upNav: 'ទៅ​លើ',
+    subFolder: 'បង្កើតថតរង', trashInfo: 'ឯកសារ​ដែល​បាន​លុប​ក្នុង​ពេល​ក្រោម​៣០​ថ្ងៃ',
+    pinProtect: 'ការ​ពារ​ដោយ PIN', activity: 'សកម្មភាព', size: 'ទំហំ', date: 'កាល​បរិច្ឆេទ',
+    type: 'ប្រភេទ', name: 'ឈ្មោះ', version: 'កំណែ', uploadedBy: 'បញ្ចូល​ដោយ',
+    admin: 'អ្នក​គ្រប់​គ្រង', user: 'អ្នក​ប្រើ', all: 'ទាំងអស់', pdf: 'PDF', document: 'ឯកសារ',
+    image: 'រូបភាព', video: 'វីដេអូ', myData: 'ទិន្នន័យរបស់ខ្ញុំ', systemUsers: 'អ្នកប្រើប្រាស់ប្រព័ន្ធ',
+  }
+};
+
+// ========== SVG ICONS ==========
+const Icon = {
+  Menu: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/></svg>,
+  X: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>,
+  Folder: ({color}) => <svg className="w-6 h-6" fill={color||"none"} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>,
+  File: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>,
+  Plus: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg>,
+  Upload: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>,
+  Trash: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>,
+  Home: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>,
+  Star: ({fill}) => <svg className="w-4 h-4" fill={fill?"currentColor":"none"} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>,
+  Clock: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>,
+  Users: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>,
+  Bell: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>,
+  Search: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>,
+  Grid: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4zM14 15a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/></svg>,
+  List: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16"/></svg>,
+  Sun: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>,
+  Moon: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>,
+  Edit: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>,
+  Download: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>,
+  Share: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m9.032 4.026a3 3 0 10-4.732 2.684m4.732-2.684a3 3 0 00-4.732-2.684M3 12a3 3 0 104.732 2.684M3 12a3 3 0 014.732-2.684"/></svg>,
+  Lock: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>,
+  Unlock: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>,
+  Eye: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>,
+  ChevronLeft: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>,
+  ChevronRight: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>,
+  ChevronUp: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7"/></svg>,
+  Camera: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>,
+  Video: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>,
+  Image: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>,
+  LogOut: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>,
+  Check: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7"/></svg>,
+  FolderPlus: () => <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>,
+  Alert: () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>,
+};
+
+// ========== STORAGE HELPERS ==========
+const STORAGE_KEY = 'filevault_pro_user_isolated';
+
+const saveToStorage = (data) => {
+  try {
+    const toSave = {
+      ...data,
+      userFolders: data.userFolders,
+      userFiles: data.userFiles,
+      userTrash: data.userTrash,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+  } catch(e) { console.warn('Storage full'); }
+};
+
+const loadFromStorage = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+};
+
+// ========== DEFAULT DATA (per-user) ==========
+const defaultFoldersPerUser = {
+  1: [ // Admin
+    { id: 101, name: 'Admin Work', color: '#3B82F6', icon: '📚', parentId: null, isLocked: false, pin: '' },
+  ],
+  2: [ // John
+    { id: 201, name: 'Engineering', color: '#3B82F6', icon: '📚', parentId: null, isLocked: false, pin: '' },
+  ],
+  3: [ // Sarah
+    { id: 301, name: 'Marketing', color: '#EC4899', icon: '🎨', parentId: null, isLocked: false, pin: '' },
+  ],
+  4: [ // Mike
+    { id: 401, name: 'Sales', color: '#10B981', icon: '💼', parentId: null, isLocked: false, pin: '' },
+  ],
+  5: [ // Lisa
+    { id: 501, name: 'Finance', color: '#10B981', icon: '💰', parentId: null, isLocked: false, pin: '' },
+  ],
+};
+
+const defaultFilesPerUser = {
+  1: [ // Admin
+    { id: 1001, name: 'Admin Report.pdf', type: 'pdf', size: '2.0 MB', folderId: 101, date: '2025-01-22', uploadedBy: 'Admin User', isFavorite: false, isPrivate: false, pin: '', dataUrl: null },
+  ],
+  2: [ // John
+    { id: 2001, name: 'API Documentation.pdf', type: 'pdf', size: '2.0 MB', folderId: 201, date: '2025-01-22', uploadedBy: 'John Doe', isFavorite: true, isPrivate: false, pin: '', dataUrl: null },
+    { id: 2002, name: 'Code Review.xlsx', type: 'document', size: '500 KB', folderId: 201, date: '2025-01-21', uploadedBy: 'John Doe', isFavorite: false, isPrivate: false, pin: '', dataUrl: null },
+  ],
+  3: [ // Sarah
+    { id: 3001, name: 'Campaign.pdf', type: 'pdf', size: '1.5 MB', folderId: 301, date: '2025-01-20', uploadedBy: 'Sarah Smith', isFavorite: true, isPrivate: false, pin: '', dataUrl: null },
+    { id: 3002, name: 'Logo Design.png', type: 'image', size: '1.2 MB', folderId: 301, date: '2025-01-19', uploadedBy: 'Sarah Smith', isFavorite: false, isPrivate: false, pin: '', dataUrl: null },
+  ],
+  4: [ // Mike
+    { id: 4001, name: 'Sales Report.xlsx', type: 'document', size: '800 KB', folderId: 401, date: '2025-01-18', uploadedBy: 'Mike Johnson', isFavorite: true, isPrivate: false, pin: '', dataUrl: null },
+  ],
+  5: [ // Lisa
+    { id: 5001, name: 'Budget 2025.pdf', type: 'pdf', size: '3.5 MB', folderId: 501, date: '2025-01-18', uploadedBy: 'Lisa Wong', isFavorite: true, isPrivate: true, pin: '1234', dataUrl: null },
+    { id: 5002, name: 'Financial Report.xlsx', type: 'document', size: '2.2 MB', folderId: 501, date: '2025-01-17', uploadedBy: 'Lisa Wong', isFavorite: false, isPrivate: false, pin: '', dataUrl: null },
+  ],
+};
+
+const defaultUsers = [
+  { id: 1, name: 'Admin User', username: 'admin', password: 'admin', dept: 'Management', role: 'admin', email: 'admin@company.com', avatar: null },
+  { id: 2, name: 'John Doe', username: 'john', password: '1234', dept: 'Engineering', role: 'user', email: 'john@company.com', avatar: null },
+  { id: 3, name: 'Sarah Smith', username: 'sarah', password: '1234', dept: 'Marketing', role: 'user', email: 'sarah@company.com', avatar: null },
+  { id: 4, name: 'Mike Johnson', username: 'mike', password: '1234', dept: 'Sales', role: 'user', email: 'mike@company.com', avatar: null },
+  { id: 5, name: 'Lisa Wong', username: 'lisa', password: '1234', dept: 'Finance', role: 'user', email: 'lisa@company.com', avatar: null },
+];
+
+// ========== HELPER ==========
+function getFileIcon(type) {
+  if (type === 'pdf') return '📄';
+  if (type === 'image') return '🖼️';
+  if (type === 'video') return '🎬';
+  if (type === 'document') return '📋';
+  return '📁';
+}
+
+function daysInTrash(deletedAt) {
+  const diff = Date.now() - new Date(deletedAt).getTime();
+  return Math.floor(diff / (1000*60*60*24));
+}
+
+function getFileType(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (['pdf'].includes(ext)) return 'pdf';
+  if (['doc','docx','xls','xlsx','ppt','pptx','txt','csv'].includes(ext)) return 'document';
+  if (['png','jpg','jpeg','gif','bmp','svg','webp'].includes(ext)) return 'image';
+  if (['mp4','avi','mov','mkv','webm'].includes(ext)) return 'video';
+  return 'document';
+}
+
+function formatSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B','KB','MB','GB'];
+  const i = Math.floor(Math.log(bytes)/Math.log(k));
+  return parseFloat((bytes/Math.pow(k,i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// ========== MODAL ==========
+function Modal({ darkMode, onClose, children, wide }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={e => e.target===e.currentTarget && onClose()}>
+      <div className={`${darkMode?'bg-slate-900 border-slate-700':'bg-white border-slate-200'} border rounded-2xl p-6 w-full ${wide?'max-w-lg':'max-w-sm'} shadow-2xl fade-in`}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ========== CONFIRM MODAL ==========
+function ConfirmModal({ darkMode, message, onConfirm, onCancel, lang }) {
+  const t = T[lang];
+  return (
+    <Modal darkMode={darkMode} onClose={onCancel}>
+      <div className="text-center">
+        <div className="flex justify-center mb-3 text-amber-400"><Icon.Alert /></div>
+        <p className={`mb-5 ${darkMode?'text-slate-200':'text-slate-800'}`}>{message}</p>
+        <div className="flex gap-3 justify-center">
+          <button onClick={onCancel} className={`px-4 py-2 rounded-lg ${darkMode?'bg-slate-700 text-slate-300 hover:bg-slate-600':'bg-slate-200 text-slate-700 hover:bg-slate-300'} smooth`}>{t.cancel}</button>
+          <button onClick={onConfirm} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg smooth">{t.save}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ========== PIN MODAL ==========
+function PinModal({ darkMode, lang, onSubmit, onCancel, title, wrongPin }) {
+  const [pin, setPin] = useState('');
+  const t = T[lang];
+  return (
+    <Modal darkMode={darkMode} onClose={onCancel}>
+      <h3 className={`text-base font-bold mb-3 ${darkMode?'text-white':'text-slate-900'}`}>{title}</h3>
+      {wrongPin && <p className="text-red-400 text-sm mb-2">{t.wrongPin}</p>}
+      <input
+        type="password" maxLength={4} placeholder="••••"
+        value={pin} onChange={e => setPin(e.target.value.replace(/\D/g,''))}
+        className={`w-full px-4 py-3 rounded-xl text-center text-2xl tracking-widest font-mono mb-4 border focus:outline-none ${darkMode?'bg-slate-800 border-slate-600 text-white':'bg-slate-100 border-slate-300 text-slate-900'}`}
+      />
+      <div className="flex gap-3">
+        <button onClick={onCancel} className={`flex-1 py-2 rounded-lg ${darkMode?'bg-slate-700 text-slate-300':'bg-slate-200 text-slate-700'}`}>{t.cancel}</button>
+        <button onClick={()=>onSubmit(pin)} className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg smooth">{t.unlock}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ========== MAIN APP ==========
+function App() {
+  const [lang, setLang] = useState('en');
+  const [darkMode, setDarkMode] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [currentPage, setCurrentPage] = useState('dashboard');
+  const [viewMode, setViewMode] = useState('grid');
+
+  // Load persisted data or use defaults
+  const saved = loadFromStorage();
+  const [users, setUsers] = useState(saved?.users || defaultUsers);
+  const [userFolders, setUserFolders] = useState(saved?.userFolders || defaultFoldersPerUser);
+  const [userFiles, setUserFiles] = useState(saved?.userFiles || defaultFilesPerUser);
+  const [userTrash, setUserTrash] = useState(saved?.userTrash || { 1: [], 2: [], 3: [], 4: [], 5: [] });
+
+  const [user, setUser] = useState(null);
+  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
+  const [loginError, setLoginError] = useState('');
+
+  // Navigation
+  const [navHistory, setNavHistory] = useState([{ page: 'dashboard', folderId: null, path: [] }]);
+  const [navIndex, setNavIndex] = useState(0);
+  const [currentFolderId, setCurrentFolderId] = useState(null);
+  const [folderPath, setFolderPath] = useState([]);
+
+  // Search & Filter
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterType, setFilterType] = useState('all');
+
+  // Modals
+  const [modal, setModal] = useState(null);
+  const [modalData, setModalData] = useState({});
+
+  // Upload
+  const fileInputRef = useRef(null);
+  const profileInputRef = useRef(null);
+  const [uploadProgress, setUploadProgress] = useState({});
+  const [toast, setToast] = useState(null);
+
+  const t = T[lang];
+  const fontClass = lang === 'kh' ? 'font-kh' : 'font-en';
+
+  // ===== CURRENT USER DATA =====
+  const currentUserFolders = userFolders[user?.id] || [];
+  const currentUserFiles = userFiles[user?.id] || [];
+  const currentUserTrash = userTrash[user?.id] || [];
+
+  // ===== PERSIST DATA =====
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    saveToStorage({ users, userFolders, userFiles, userTrash });
+  }, [users, userFolders, userFiles, userTrash]);
+
+  // Auto-clean trash > 30 days
+  useEffect(() => {
+    if (!user) return;
+    const cleaned = currentUserTrash.filter(f => daysInTrash(f.deletedAt) < 30);
+    if (cleaned.length !== currentUserTrash.length) {
+      setUserTrash(prev => ({ ...prev, [user.id]: cleaned }));
+    }
+  }, [currentUserTrash, user]);
+
+  const showToast = (msg, type='success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 2500);
+  };
+
+  // ===== LOGIN =====
+  const handleLogin = (e) => {
+    e.preventDefault();
+    const found = users.find(u => u.username === loginForm.username && u.password === loginForm.password);
+    if (found) {
+      setUser(found);
+      setIsLoggedIn(true);
+      setLoginError('');
+    } else {
+      setLoginError('Invalid username or password');
+    }
+  };
+
+  // ===== NAVIGATION =====
+  const navigate = (page, folderId=null, path=[]) => {
+    const newEntry = { page, folderId, path };
+    const newHistory = [...navHistory.slice(0, navIndex+1), newEntry];
+    setNavHistory(newHistory);
+    setNavIndex(newHistory.length - 1);
+    setCurrentPage(page);
+    setCurrentFolderId(folderId);
+    setFolderPath(path);
+  };
+
+  const navBack = () => {
+    if (navIndex > 0) {
+      const entry = navHistory[navIndex - 1];
+      setNavIndex(navIndex - 1);
+      setCurrentPage(entry.page);
+      setCurrentFolderId(entry.folderId);
+      setFolderPath(entry.path);
+    }
+  };
+
+  const navForward = () => {
+    if (navIndex < navHistory.length - 1) {
+      const entry = navHistory[navIndex + 1];
+      setNavIndex(navIndex + 1);
+      setCurrentPage(entry.page);
+      setCurrentFolderId(entry.folderId);
+      setFolderPath(entry.path);
+    }
+  };
+
+  const navUp = () => {
+    if (folderPath.length > 0) {
+      const newPath = folderPath.slice(0, -1);
+      const parentId = newPath.length > 0 ? newPath[newPath.length-1].id : null;
+      navigate('dashboard', parentId, newPath);
+    }
+  };
+
+  // ===== FOLDER OPERATIONS =====
+  const openFolder = (folder) => {
+    if (folder.isLocked) {
+      setModal('pinFolder');
+      setModalData({ folder });
+      return;
+    }
+    doOpenFolder(folder);
+  };
+
+  const doOpenFolder = (folder) => {
+    const newPath = [...folderPath, { id: folder.id, name: folder.name }];
+    navigate('dashboard', folder.id, newPath);
+  };
+
+  const handleCreateFolder = (name, color, parentId) => {
+    if (!name.trim()) return;
+    const existing = currentUserFolders.find(f => f.name === name && f.parentId === parentId);
+    if (existing) { showToast(t.confirmSave, 'warn'); return; }
+    
+    const newId = Math.max(...currentUserFolders.map(f=>f.id), 0) + 1;
+    const newF = { id: newId, name, color: color||'#3B82F6', icon: '📁', parentId, isLocked: false, pin: '' };
+    
+    setUserFolders(prev => ({
+      ...prev,
+      [user.id]: [...(prev[user.id] || []), newF]
+    }));
+    setModal(null);
+    showToast(`Folder "${name}" created!`);
+  };
+
+  const handleDeleteFolder = (folder) => {
+    setModal('confirmDeleteFolder');
+    setModalData({ folder });
+  };
+
+  const doDeleteFolder = (folder) => {
+    const collectIds = (parentId) => {
+      const children = currentUserFolders.filter(f => f.parentId === parentId);
+      return [parentId, ...children.flatMap(c => collectIds(c.id))];
+    };
+    const ids = collectIds(folder.id);
+    const movedFiles = currentUserFiles.filter(f => ids.includes(f.folderId)).map(f => ({ ...f, deletedAt: new Date().toISOString() }));
+    
+    setUserTrash(prev => ({
+      ...prev,
+      [user.id]: [...(prev[user.id] || []), ...movedFiles]
+    }));
+    setUserFiles(prev => ({
+      ...prev,
+      [user.id]: prev[user.id].filter(f => !ids.includes(f.folderId))
+    }));
+    setUserFolders(prev => ({
+      ...prev,
+      [user.id]: prev[user.id].filter(f => !ids.includes(f.id))
+    }));
+    
+    if (currentFolderId === folder.id) navigate('dashboard', null, []);
+    setModal(null);
+  };
+
+  const handleLockFolder = (folder) => {
+    if (folder.isLocked) {
+      setUserFolders(prev => ({
+        ...prev,
+        [user.id]: prev[user.id].map(f => f.id===folder.id ? {...f, isLocked: false, pin: ''} : f)
+      }));
+      showToast(`Folder "${folder.name}" unlocked`);
+    } else {
+      setModal('setPinFolder');
+      setModalData({ folder });
+    }
+  };
+
+  const doSetPinFolder = (folder, pin) => {
+    if (pin.length !== 4) { showToast('PIN must be 4 digits','error'); return; }
+    setUserFolders(prev => ({
+      ...prev,
+      [user.id]: prev[user.id].map(f => f.id===folder.id ? {...f, isLocked: true, pin} : f)
+    }));
+    setModal(null);
+    showToast(`Folder "${folder.name}" locked with PIN`);
+  };
+
+  // ===== FILE OPERATIONS =====
+  const handleFileSelect = (e) => handleFiles(Array.from(e.target.files));
+  const handleDrop = (e) => { e.preventDefault(); handleFiles(Array.from(e.dataTransfer.files)); };
+  const handleDragOver = (e) => e.preventDefault();
+
+  const handleFiles = (fileList) => {
+    fileList.forEach(file => {
+      const type = getFileType(file.name);
+      const existingName = currentUserFiles.find(f => f.name === file.name && f.folderId === currentFolderId);
+      if (existingName) {
+        setModal('confirmSave');
+        setModalData({ file, type, existingName });
+        return;
+      }
+      doUploadFile(file, type);
+    });
+  };
+
+  const doUploadFile = (file, type) => {
+    const id = Date.now() + Math.random();
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target.result;
+      let progress = 0;
+      const interval = setInterval(() => {
+        progress = Math.min(progress + Math.random() * 40, 100);
+        setUploadProgress(prev => ({ ...prev, [id]: progress }));
+        if (progress >= 100) {
+          clearInterval(interval);
+          const newFile = {
+            id, name: file.name, type, size: formatSize(file.size),
+            folderId: currentFolderId, date: new Date().toISOString().split('T')[0],
+            uploadedBy: user.name, isFavorite: false, isPrivate: false, pin: '', dataUrl
+          };
+          
+          setUserFiles(prev => ({
+            ...prev,
+            [user.id]: [...(prev[user.id] || []), newFile]
+          }));
+          
+          setTimeout(() => setUploadProgress(prev => { const n={...prev}; delete n[id]; return n; }), 1500);
+          showToast(`"${file.name}" uploaded!`);
+        }
+      }, 200);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDeleteFile = (file) => {
+    setModal('confirmDeleteFile');
+    setModalData({ file });
+  };
+
+  const doDeleteFile = (file) => {
+    setUserFiles(prev => ({
+      ...prev,
+      [user.id]: prev[user.id].filter(f => f.id !== file.id)
+    }));
+    setUserTrash(prev => ({
+      ...prev,
+      [user.id]: [...(prev[user.id] || []), { ...file, deletedAt: new Date().toISOString() }]
+    }));
+    setModal(null);
+    showToast(`"${file.name}" moved to trash`);
+  };
+
+  const handleRestoreFile = (trashFile) => {
+    setUserTrash(prev => ({
+      ...prev,
+      [user.id]: prev[user.id].filter(f => f.id !== trashFile.id)
+    }));
+    const { deletedAt, ...restored } = trashFile;
+    setUserFiles(prev => ({
+      ...prev,
+      [user.id]: [...(prev[user.id] || []), restored]
+    }));
+    showToast(`Restored "${trashFile.name}"`);
+  };
+
+  const handleToggleFavorite = (id) => {
+    setUserFiles(prev => ({
+      ...prev,
+      [user.id]: prev[user.id].map(f => f.id===id ? {...f, isFavorite: !f.isFavorite} : f)
+    }));
+  };
+
+  const handleLockFile = (file) => {
+    if (file.isPrivate) {
+      setUserFiles(prev => ({
+        ...prev,
+        [user.id]: prev[user.id].map(f => f.id===file.id ? {...f, isPrivate: false, pin: ''} : f)
+      }));
+      showToast(`"${file.name}" unlocked`);
+    } else {
+      setModal('setPinFile');
+      setModalData({ file });
+    }
+  };
+
+  const doSetPinFile = (file, pin) => {
+    if (pin.length !== 4) { showToast('PIN must be 4 digits', 'error'); return; }
+    setUserFiles(prev => ({
+      ...prev,
+      [user.id]: prev[user.id].map(f => f.id===file.id ? {...f, isPrivate: true, pin} : f)
+    }));
+    setModal(null);
+    showToast(`"${file.name}" locked with PIN`);
+  };
+
+  const handleViewPrivateFile = (file) => {
+    setModal('pinUnlockFile');
+    setModalData({ file, wrongPin: false });
+  };
+
+  const doUnlockFile = (file, pin) => {
+    if (pin === file.pin) {
+      setModal('preview');
+      setModalData({ file });
+    } else {
+      setModalData(prev => ({ ...prev, wrongPin: true }));
+    }
+  };
+
+  const handleDownload = (file) => {
+    if (file.dataUrl) {
+      const a = document.createElement('a');
+      a.href = file.dataUrl;
+      a.download = file.name;
+      a.click();
+    } else {
+      showToast('No downloadable content for demo files', 'warn');
+    }
+  };
+
+  const handleRenameItem = (item, isFolder) => {
+    setModal('rename');
+    setModalData({ item, isFolder, value: item.name });
+  };
+
+  const doRename = (item, isFolder, newName) => {
+    if (!newName.trim() || newName === item.name) { setModal(null); return; }
+    const col = isFolder ? currentUserFolders : currentUserFiles;
+    const dup = col.find(x => x.name === newName && x.id !== item.id);
+    if (dup) { showToast(t.confirmSave, 'warn'); return; }
+    
+    if (isFolder) {
+      setUserFolders(prev => ({
+        ...prev,
+        [user.id]: prev[user.id].map(f => f.id===item.id ? {...f, name: newName} : f)
+      }));
+    } else {
+      setUserFiles(prev => ({
+        ...prev,
+        [user.id]: prev[user.id].map(f => f.id===item.id ? {...f, name: newName} : f)
+      }));
+    }
+    setModal(null);
+    showToast('Renamed successfully');
+  };
+
+  // ===== PROFILE =====
+  const handleProfilePhotoChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const updated = { ...user, avatar: ev.target.result };
+      setUser(updated);
+      setUsers(prev => prev.map(u => u.id===user.id ? updated : u));
+      showToast('Profile photo updated!');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // ===== FILTER FILES =====
+  const currentFiles = currentUserFiles.filter(f => {
+    if (f.folderId !== currentFolderId) return false;
+    if (filterType !== 'all' && f.type !== filterType) return false;
+    if (searchQuery && !f.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    return true;
+  });
+
+  const currentSubFolders = currentUserFolders.filter(f => {
+    if (f.parentId !== currentFolderId) return false;
+    if (searchQuery && !f.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    return true;
+  });
+
+  const searchResults = searchQuery ? currentUserFiles.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase())) : [];
+  const searchFolderResults = searchQuery ? currentUserFolders.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase())) : [];
+
+  // ===== THEME VARS =====
+  const bg = darkMode ? 'bg-slate-950' : 'bg-gray-50';
+  const text = darkMode ? 'text-slate-100' : 'text-slate-900';
+  const sub = darkMode ? 'text-slate-400' : 'text-slate-500';
+  const border = darkMode ? 'border-slate-800' : 'border-slate-200';
+  const card = darkMode ? 'bg-slate-900/60 border-slate-800' : 'bg-white border-slate-200';
+  const sidebar = darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200';
+  const hover = darkMode ? 'hover:bg-slate-800' : 'hover:bg-slate-100';
+  const input = darkMode ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder-slate-500' : 'bg-slate-100 border-slate-300 text-slate-900 placeholder-slate-400';
+
+  // ===== SIDEBAR =====
+  const sidebarItems = [
+    { icon: Icon.Home, label: t.dashboard, page: 'dashboard', onClick: () => navigate('dashboard', null, []) },
+    { icon: Icon.Star, label: t.favorites, page: 'favorites', onClick: () => { setCurrentPage('favorites'); } },
+    { icon: Icon.Folder, label: t.allFiles, page: 'files', onClick: () => navigate('dashboard', null, []) },
+    { icon: Icon.Clock, label: t.recent, page: 'recent', onClick: () => setCurrentPage('recent') },
+    { icon: Icon.Trash, label: t.trash, page: 'trash', onClick: () => setCurrentPage('trash') },
+    ...(user?.role==='admin' ? [
+      { icon: Icon.Users, label: t.users, page: 'users', onClick: () => setCurrentPage('users') },
+    ] : []),
+  ];
+
+  // ===== LOGIN SCREEN =====
+  if (!isLoggedIn) {
+    return (
+      <div className={`min-h-screen ${bg} ${fontClass} flex items-center justify-center p-4`}>
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className={`absolute top-0 left-1/4 w-96 h-96 ${darkMode?'bg-blue-500/10':'bg-blue-200/30'} rounded-full blur-3xl`}/>
+          <div className={`absolute bottom-0 right-1/4 w-96 h-96 ${darkMode?'bg-purple-500/10':'bg-purple-200/30'} rounded-full blur-3xl`}/>
+        </div>
+        <div className="relative z-10 max-w-md w-full">
+          <div className="text-center mb-10">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-600 to-purple-600 mb-4 shadow-lg">
+              <Icon.Folder color="white" />
+            </div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">{t.appName}</h1>
+            <p className={sub}>User-Isolated File Management</p>
+          </div>
+
+          <div className={`${card} border rounded-3xl p-8 shadow-2xl`}>
+            <div className="flex justify-between items-center mb-6">
+              <div className="flex gap-2">
+                <button onClick={()=>setLang('en')} className={`px-3 py-1 rounded-lg text-sm smooth ${lang==='en'?'bg-blue-600 text-white':darkMode?'bg-slate-700 text-slate-300':'bg-slate-200 text-slate-600'}`}>EN</button>
+                <button onClick={()=>setLang('kh')} className={`px-3 py-1 rounded-lg text-sm smooth ${lang==='kh'?'bg-blue-600 text-white':darkMode?'bg-slate-700 text-slate-300':'bg-slate-200 text-slate-600'}`}>ខ្មែរ</button>
+              </div>
+              <button onClick={()=>setDarkMode(!darkMode)} className={`p-2 rounded-lg ${darkMode?'bg-slate-800 text-yellow-400':'bg-slate-200 text-slate-600'}`}>
+                {darkMode?<Icon.Sun/>:<Icon.Moon/>}
+              </button>
+            </div>
+
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${text}`}>{t.username}</label>
+                <input type="text" value={loginForm.username} onChange={e=>setLoginForm({...loginForm,username:e.target.value})}
+                  className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:border-blue-500 ${input}`} placeholder="admin / john / sarah..." required />
+              </div>
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${text}`}>{t.password}</label>
+                <input type="password" value={loginForm.password} onChange={e=>setLoginForm({...loginForm,password:e.target.value})}
+                  className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:border-blue-500 ${input}`} placeholder="admin / 1234" required />
+              </div>
+              {loginError && <p className="text-red-400 text-sm">{loginError}</p>}
+              <button type="submit" className="w-full py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold rounded-xl transition shadow-lg mt-2">{t.login}</button>
+            </form>
+
+            <div className={`mt-5 p-3 rounded-xl text-sm ${darkMode?'bg-slate-800 text-slate-400':'bg-slate-100 text-slate-600'}`}>
+              👑 <strong>admin</strong> / admin &nbsp;|&nbsp; 👤 john,sarah,mike,lisa / 1234
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ===== PAGE CONTENT =====
+  const renderContent = () => {
+    // Search
+    if (searchQuery && currentPage === 'dashboard') {
+      return (
+        <div className="space-y-4 fade-in">
+          <h3 className={`text-base font-semibold ${text}`}>{t.search.split('...')[0]}: "{searchQuery}"</h3>
+          {searchFolderResults.length > 0 && (
+            <div>
+              <p className={`text-xs uppercase font-bold mb-2 ${sub}`}>{t.folders}</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {searchFolderResults.map(f => <FolderCard key={f.id} folder={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang}
+                  onOpen={openFolder} onDelete={()=>handleDeleteFolder(f)} onLock={()=>handleLockFolder(f)} onRename={()=>handleRenameItem(f,true)} onSubFolder={()=>{setModal('subFolder');setModalData({parentId:f.id});}} />)}
+              </div>
+            </div>
+          )}
+          {searchResults.length > 0 && (
+            <div>
+              <p className={`text-xs uppercase font-bold mb-2 ${sub}`}>{t.allFiles}</p>
+              <div className={viewMode==='grid'?'grid grid-cols-2 md:grid-cols-4 gap-3':'space-y-2'}>
+                {searchResults.map(f => <FileCard key={f.id} file={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang} viewMode={viewMode}
+                  onDelete={()=>handleDeleteFile(f)} onFavorite={()=>handleToggleFavorite(f.id)}
+                  onPreview={()=>{ if(f.isPrivate) handleViewPrivateFile(f); else {setModal('preview');setModalData({file:f});}}}
+                  onDownload={()=>handleDownload(f)} onLock={()=>handleLockFile(f)} onRename={()=>handleRenameItem(f,false)} />)}
+              </div>
+            </div>
+          )}
+          {searchResults.length===0 && searchFolderResults.length===0 && (
+            <p className={sub}>{t.noFiles}</p>
+          )}
+        </div>
+      );
+    }
+
+    if (currentPage === 'favorites') {
+      const favFiles = currentUserFiles.filter(f => f.isFavorite && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase())));
+      return (
+        <div className="fade-in">
+          <h3 className={`text-base font-semibold mb-4 ${text}`}>⭐ {t.favorites}</h3>
+          {favFiles.length===0 ? <p className={sub}>{t.noFiles}</p> : (
+            <div className={viewMode==='grid'?'grid grid-cols-2 md:grid-cols-4 gap-3':'space-y-2'}>
+              {favFiles.map(f => <FileCard key={f.id} file={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang} viewMode={viewMode}
+                onDelete={()=>handleDeleteFile(f)} onFavorite={()=>handleToggleFavorite(f.id)}
+                onPreview={()=>{ if(f.isPrivate) handleViewPrivateFile(f); else {setModal('preview');setModalData({file:f});}}}
+                onDownload={()=>handleDownload(f)} onLock={()=>handleLockFile(f)} onRename={()=>handleRenameItem(f,false)} />)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (currentPage === 'recent') {
+      const recentFiles = [...currentUserFiles].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,20)
+        .filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()));
+      return (
+        <div className="fade-in">
+          <h3 className={`text-base font-semibold mb-4 ${text}`}>🕐 {t.recent}</h3>
+          {recentFiles.length===0 ? <p className={sub}>{t.noFiles}</p> : (
+            <div className={viewMode==='grid'?'grid grid-cols-2 md:grid-cols-4 gap-3':'space-y-2'}>
+              {recentFiles.map(f => <FileCard key={f.id} file={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang} viewMode={viewMode}
+                onDelete={()=>handleDeleteFile(f)} onFavorite={()=>handleToggleFavorite(f.id)}
+                onPreview={()=>{ if(f.isPrivate) handleViewPrivateFile(f); else {setModal('preview');setModalData({file:f});}}}
+                onDownload={()=>handleDownload(f)} onLock={()=>handleLockFile(f)} onRename={()=>handleRenameItem(f,false)} />)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (currentPage === 'trash') {
+      const validTrash = currentUserTrash.filter(f => daysInTrash(f.deletedAt) < 30 && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase())));
+      return (
+        <div className="fade-in">
+          <h3 className={`text-base font-semibold mb-1 ${text}`}>🗑️ {t.trash}</h3>
+          <p className={`text-xs mb-4 ${sub}`}>{t.trashInfo}</p>
+          {validTrash.length===0 ? <p className={sub}>{t.noFiles}</p> : (
+            <div className="space-y-2">
+              {validTrash.map(f => (
+                <div key={f.id} className={`${card} border rounded-xl p-3 flex items-center gap-3`}>
+                  <span className="text-xl">{getFileIcon(f.type)}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-medium truncate ${text}`}>{f.name}</p>
+                    <p className={`text-xs ${sub}`}>{30 - daysInTrash(f.deletedAt)} {t.daysLeft}</p>
+                  </div>
+                  <button onClick={()=>handleRestoreFile(f)} className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-xs rounded-lg smooth">{t.restore}</button>
+                  <button onClick={()=>setUserTrash(prev=>({...prev,[user.id]:prev[user.id].filter(x=>x.id!==f.id)}))} className="px-3 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs rounded-lg smooth">{t.delete}</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (currentPage === 'users') {
+      return (
+        <div className="fade-in">
+          <h3 className={`text-base font-semibold mb-4 ${text}`}>👥 {t.users}</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {users.map(u => (
+              <div key={u.id} className={`${card} border rounded-xl p-4 flex items-center gap-4`}>
+                <div className="w-12 h-12 rounded-full overflow-hidden bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
+                  {u.avatar ? <img src={u.avatar} alt={u.name} className="w-full h-full object-cover"/> : <span className="text-white font-bold text-lg">{u.name[0]}</span>}
+                </div>
+                <div className="flex-1">
+                  <p className={`font-semibold ${text}`}>{u.name}</p>
+                  <p className={`text-xs ${sub}`}>{u.role==='admin'?'👑 Admin':'👤 User'} · {u.dept}</p>
+                  <p className={`text-xs ${sub}`}>{u.email}</p>
+                </div>
+                <div className={`text-xs px-2 py-1 rounded ${darkMode?'bg-slate-800 text-slate-400':'bg-slate-200 text-slate-600'}`}>
+                  {currentUserFiles.length} files
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // DASHBOARD (folder browser)
+    return (
+      <div className="space-y-5 fade-in">
+        {/* Stats */}
+        {folderPath.length === 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: t.totalFiles, val: currentUserFiles.length, color: 'from-blue-600 to-blue-700', icon: '📄' },
+              { label: t.folders, val: currentUserFolders.filter(f=>f.parentId===null).length, color: 'from-purple-600 to-purple-700', icon: '📁' },
+              { label: t.favorites, val: currentUserFiles.filter(f=>f.isFavorite).length, color: 'from-yellow-500 to-orange-500', icon: '⭐' },
+              { label: t.trash, val: currentUserTrash.filter(f=>daysInTrash(f.deletedAt)<30).length, color: 'from-red-600 to-red-700', icon: '🗑️' },
+            ].map(s => (
+              <div key={s.label} className={`bg-gradient-to-br ${s.color} rounded-xl p-4 text-white`}>
+                <div className="text-2xl mb-1">{s.icon}</div>
+                <div className="text-2xl font-bold">{s.val}</div>
+                <div className="text-sm opacity-80">{s.label}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Upload area */}
+        <div className={`${card} border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer ${hover} smooth`}
+          onDrop={handleDrop} onDragOver={handleDragOver} onClick={()=>fileInputRef.current?.click()}>
+          <div className={`text-3xl mb-2`}>☁️</div>
+          <p className={`text-sm ${sub}`}>{t.dropFiles}</p>
+          <input type="file" multiple ref={fileInputRef} onChange={handleFileSelect} />
+          {Object.keys(uploadProgress).length > 0 && (
+            <div className="mt-3 space-y-2">
+              {Object.entries(uploadProgress).map(([id, p]) => (
+                <div key={id} className={`w-full h-1.5 rounded-full ${darkMode?'bg-slate-700':'bg-slate-300'} overflow-hidden`}>
+                  <div className="h-full bg-gradient-to-r from-blue-500 to-purple-500 smooth" style={{width:`${p}%`}}/>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Filter pills */}
+        <div className="flex flex-wrap gap-2">
+          {['all','pdf','document','image','video'].map(tp => (
+            <button key={tp} onClick={()=>setFilterType(tp)}
+              className={`px-3 py-1 rounded-full text-xs font-medium smooth ${filterType===tp?'bg-blue-600 text-white':darkMode?'bg-slate-800 text-slate-300 hover:bg-slate-700':'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
+              {t[tp]||tp}
+            </button>
+          ))}
+        </div>
+
+        {/* Sub-folders */}
+        {currentSubFolders.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className={`text-xs uppercase font-bold ${sub}`}>{t.folders}</p>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {currentSubFolders.map(f => (
+                <FolderCard key={f.id} folder={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang}
+                  onOpen={openFolder} onDelete={()=>handleDeleteFolder(f)} onLock={()=>handleLockFolder(f)} onRename={()=>handleRenameItem(f,true)}
+                  onSubFolder={()=>{setModal('subFolder');setModalData({parentId:f.id});}} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Files */}
+        {currentFiles.length > 0 ? (
+          <div>
+            <p className={`text-xs uppercase font-bold mb-2 ${sub}`}>{t.allFiles}</p>
+            <div className={viewMode==='grid'?'grid grid-cols-2 md:grid-cols-4 gap-3':'space-y-2'}>
+              {currentFiles.map(f => (
+                <FileCard key={f.id} file={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang} viewMode={viewMode}
+                  onDelete={()=>handleDeleteFile(f)} onFavorite={()=>handleToggleFavorite(f.id)}
+                  onPreview={()=>{ if(f.isPrivate) handleViewPrivateFile(f); else {setModal('preview');setModalData({file:f});}}}
+                  onDownload={()=>handleDownload(f)} onLock={()=>handleLockFile(f)} onRename={()=>handleRenameItem(f,false)} />
+              ))}
+            </div>
+          </div>
+        ) : currentSubFolders.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="text-4xl mb-2">📂</div>
+            <p className={sub}>{t.noFiles}</p>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <div className={`flex h-screen ${bg} ${fontClass} overflow-hidden`}>
+      {/* SIDEBAR */}
+      <div className={`${sidebarOpen?'w-56':'w-0'} ${sidebar} border-r ${border} smooth overflow-hidden flex flex-col shrink-0`}>
+        {/* Logo */}
+        <div className={`h-16 flex items-center px-4 border-b ${border} gap-3`}>
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center">
+            <Icon.Folder color="white" />
+          </div>
+          <span className={`font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent`}>{t.appName}</span>
+        </div>
+
+        {/* User info */}
+        <div className={`p-3 border-b ${border}`}>
+          <div className="flex items-center gap-2 cursor-pointer" onClick={()=>setModal('profile')}>
+            <div className="w-9 h-9 rounded-full overflow-hidden bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center relative">
+              {user?.avatar ? <img src={user.avatar} alt="" className="w-full h-full object-cover"/> : <span className="text-white font-bold">{user?.name[0]}</span>}
+              <div className="absolute inset-0 bg-black/0 hover:bg-black/30 smooth flex items-center justify-center opacity-0 hover:opacity-100 rounded-full">
+                <Icon.Camera />
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`text-sm font-semibold truncate ${text}`}>{user?.name}</p>
+              <p className={`text-xs ${sub}`}>{user?.role==='admin'?'👑 Admin':'👤 User'}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto no-scrollbar">
+          {sidebarItems.map(item => (
+            <button key={item.page} onClick={item.onClick}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg smooth text-sm ${
+                currentPage===item.page ? (darkMode?'bg-blue-600/20 text-blue-400':'bg-blue-100 text-blue-600')
+                  : `${sub} ${hover}`}`}>
+              <item.icon /> <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        {/* Bottom actions */}
+        <div className={`p-2 border-t ${border} space-y-1`}>
+          <button onClick={()=>setIsLoggedIn(false)}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg smooth text-sm ${darkMode?'text-red-400 hover:bg-red-600/10':'text-red-600 hover:bg-red-50'}`}>
+            <Icon.LogOut/> {t.logout}
+          </button>
+        </div>
+      </div>
+
+      {/* MAIN */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* TOP NAV */}
+        <div className={`h-14 ${darkMode?'bg-slate-900/70':'bg-white/80'} backdrop-blur border-b ${border} px-4 flex items-center gap-3`}>
+          {/* Sidebar toggle */}
+          <button onClick={()=>setSidebarOpen(!sidebarOpen)} className={`p-1.5 rounded-lg ${hover} ${sub} smooth`}>
+            {sidebarOpen?<Icon.X/>:<Icon.Menu/>}
+          </button>
+
+          {/* Navigation buttons */}
+          <div className="flex items-center gap-1">
+            <button onClick={navBack} disabled={navIndex===0}
+              className={`p-1.5 rounded-lg smooth ${navIndex===0?'opacity-30 cursor-not-allowed':hover} ${sub}`} title={t.backNav}>
+              <Icon.ChevronLeft/>
+            </button>
+            <button onClick={navForward} disabled={navIndex===navHistory.length-1}
+              className={`p-1.5 rounded-lg smooth ${navIndex===navHistory.length-1?'opacity-30 cursor-not-allowed':hover} ${sub}`} title={t.forwardNav}>
+              <Icon.ChevronRight/>
+            </button>
+            <button onClick={navUp} disabled={folderPath.length===0}
+              className={`p-1.5 rounded-lg smooth ${folderPath.length===0?'opacity-30 cursor-not-allowed':hover} ${sub}`} title={t.upNav}>
+              <Icon.ChevronUp/>
+            </button>
+          </div>
+
+          {/* Breadcrumb */}
+          <div className="flex items-center gap-1 text-sm overflow-x-auto no-scrollbar">
+            <button onClick={()=>navigate('dashboard',null,[])} className={`${sub} hover:text-blue-400 smooth whitespace-nowrap`}>FileVault</button>
+            {folderPath.map((p,i) => (
+              <React.Fragment key={p.id}>
+                <span className={sub}>/</span>
+                <button onClick={()=>{
+                  const newPath = folderPath.slice(0,i+1);
+                  navigate('dashboard', p.id, newPath);
+                }} className={`hover:text-blue-400 smooth whitespace-nowrap ${i===folderPath.length-1?text:sub}`}>{p.name}</button>
+              </React.Fragment>
+            ))}
+          </div>
+
+          <div className="flex-1"/>
+
+          {/* Search */}
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${darkMode?'bg-slate-800/40 border-slate-700':'bg-slate-100 border-slate-200'} w-48`}>
+            <Icon.Search />
+            <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}
+              placeholder={t.search} className={`bg-transparent outline-none text-sm flex-1 ${darkMode?'text-slate-100 placeholder-slate-500':'text-slate-900 placeholder-slate-400'}`}/>
+            {searchQuery && <button onClick={()=>setSearchQuery('')} className={`${sub} hover:text-red-400`}><Icon.X/></button>}
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-1">
+            {/* Lang toggle */}
+            <button onClick={()=>setLang(lang==='en'?'kh':'en')} className={`px-2 py-1 rounded-lg text-xs font-bold ${darkMode?'bg-slate-800 text-slate-300 hover:bg-slate-700':'bg-slate-200 text-slate-600 hover:bg-slate-300'} smooth`}>
+              {lang==='en'?'ខ្មែរ':'EN'}
+            </button>
+            <button onClick={()=>setDarkMode(!darkMode)} className={`p-1.5 rounded-lg ${darkMode?'text-yellow-400 hover:bg-slate-800':'text-slate-600 hover:bg-slate-200'} smooth`}>
+              {darkMode?<Icon.Sun/>:<Icon.Moon/>}
+            </button>
+            <button onClick={()=>setViewMode(viewMode==='grid'?'list':'grid')} className={`p-1.5 rounded-lg ${hover} ${sub} smooth`}>
+              {viewMode==='grid'?<Icon.List/>:<Icon.Grid/>}
+            </button>
+          </div>
+
+          {/* New Folder & Upload */}
+          <button onClick={()=>{setModal('newFolder');setModalData({parentId:currentFolderId});}}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm smooth">
+            <Icon.FolderPlus/> {t.newFolder}
+          </button>
+        </div>
+
+        {/* CONTENT */}
+        <main className={`flex-1 overflow-auto p-5 ${bg}`}>
+          {renderContent()}
+        </main>
+      </div>
+
+      {/* ===== MODALS ===== */}
+
+      {/* New Folder */}
+      {(modal==='newFolder' || modal==='subFolder') && (
+        <NewFolderModal darkMode={darkMode} lang={lang} parentId={modalData.parentId}
+          onClose={()=>setModal(null)} onCreate={handleCreateFolder} t={t} input={input} text={text} sub={sub} />
+      )}
+
+      {/* Profile */}
+      {modal==='profile' && (
+        <Modal darkMode={darkMode} onClose={()=>setModal(null)} wide>
+          <h3 className={`text-base font-bold mb-4 ${text}`}>{t.editProfile}</h3>
+          <div className="flex items-center gap-4 mb-5">
+            <div className="relative">
+              <div className="w-16 h-16 rounded-full overflow-hidden bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
+                {user?.avatar ? <img src={user.avatar} alt="" className="w-full h-full object-cover"/> : <span className="text-white text-2xl font-bold">{user?.name[0]}</span>}
+              </div>
+              <button onClick={()=>profileInputRef.current?.click()}
+                className="absolute -bottom-1 -right-1 w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center text-white shadow">
+                <Icon.Camera />
+              </button>
+              <input type="file" accept="image/*" ref={profileInputRef} onChange={handleProfilePhotoChange}/>
+            </div>
+            <div>
+              <p className={`font-semibold ${text}`}>{user?.name}</p>
+              <p className={`text-sm ${sub}`}>{user?.email}</p>
+              <p className={`text-xs ${sub}`}>{user?.role==='admin'?'👑 Admin':'👤 User'} · {user?.dept}</p>
+            </div>
+          </div>
+          <button onClick={()=>profileInputRef.current?.click()}
+            className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl smooth text-sm">
+            {t.changePhoto}
+          </button>
+          <button onClick={()=>setModal(null)} className={`w-full py-2.5 mt-2 rounded-xl text-sm smooth ${darkMode?'bg-slate-800 text-slate-300 hover:bg-slate-700':'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>
+            {t.cancel}
+          </button>
+        </Modal>
+      )}
+
+      {/* Preview */}
+      {modal==='preview' && modalData.file && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={e=>e.target===e.currentTarget&&setModal(null)}>
+          <div className={`${darkMode?'bg-slate-900':'bg-white'} rounded-2xl overflow-hidden shadow-2xl max-w-2xl w-full fade-in`}>
+            <div className={`flex items-center justify-between px-4 py-3 border-b ${border}`}>
+              <div className="flex items-center gap-2">
+                <span>{getFileIcon(modalData.file.type)}</span>
+                <span className={`font-medium ${text} text-sm truncate max-w-xs`}>{modalData.file.name}</span>
+                {modalData.file.isPrivate && <span className="text-xs bg-red-600/20 text-red-400 px-2 py-0.5 rounded-full">🔒 {t.privateFile}</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={()=>handleDownload(modalData.file)} className="p-1.5 text-blue-400 hover:bg-blue-600/20 rounded-lg smooth"><Icon.Download/></button>
+                <button onClick={()=>setModal(null)} className={`p-1.5 ${sub} ${hover} rounded-lg smooth`}><Icon.X/></button>
+              </div>
+            </div>
+            <div className="p-4 flex items-center justify-center min-h-48 max-h-96 overflow-auto">
+              {modalData.file.type==='image' && modalData.file.dataUrl ? (
+                <img src={modalData.file.dataUrl} alt={modalData.file.name} className="max-w-full max-h-80 object-contain rounded-lg"/>
+              ) : modalData.file.type==='video' && modalData.file.dataUrl ? (
+                <video controls className="max-w-full max-h-80 rounded-lg"><source src={modalData.file.dataUrl}/></video>
+              ) : modalData.file.type==='pdf' && modalData.file.dataUrl ? (
+                <iframe src={modalData.file.dataUrl} className="w-full h-80 rounded-lg border-0"/>
+              ) : (
+                <div className="text-center">
+                  <div className="text-6xl mb-3">{getFileIcon(modalData.file.type)}</div>
+                  <p className={`${sub} text-sm`}>{modalData.file.name}</p>
+                  <p className={`${sub} text-xs`}>{modalData.file.size} · {modalData.file.date}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Set PIN for file */}
+      {modal==='setPinFile' && (
+        <PinModal darkMode={darkMode} lang={lang} title={t.setPin} wrongPin={false}
+          onSubmit={pin=>doSetPinFile(modalData.file, pin)} onCancel={()=>setModal(null)} />
+      )}
+
+      {/* Unlock private file */}
+      {modal==='pinUnlockFile' && (
+        <PinModal darkMode={darkMode} lang={lang} title={t.enterPin} wrongPin={modalData.wrongPin}
+          onSubmit={pin=>doUnlockFile(modalData.file, pin)} onCancel={()=>setModal(null)} />
+      )}
+
+      {/* Set PIN for folder */}
+      {modal==='setPinFolder' && (
+        <PinModal darkMode={darkMode} lang={lang} title={t.setPin} wrongPin={false}
+          onSubmit={pin=>doSetPinFolder(modalData.folder, pin)} onCancel={()=>setModal(null)} />
+      )}
+
+      {/* Unlock folder */}
+      {modal==='pinFolder' && (
+        <PinModal darkMode={darkMode} lang={lang} title={t.enterPin} wrongPin={modalData.wrongPin}
+          onSubmit={pin=>{
+            if (pin===modalData.folder.pin) { setModal(null); doOpenFolder(modalData.folder); }
+            else setModalData(prev=>({...prev, wrongPin:true}));
+          }} onCancel={()=>setModal(null)} />
+      )}
+
+      {/* Confirm delete file */}
+      {modal==='confirmDeleteFile' && (
+        <ConfirmModal darkMode={darkMode} lang={lang} message={`${t.confirmDelete} "${modalData.file?.name}"`}
+          onConfirm={()=>doDeleteFile(modalData.file)} onCancel={()=>setModal(null)} />
+      )}
+
+      {/* Confirm delete folder */}
+      {modal==='confirmDeleteFolder' && (
+        <ConfirmModal darkMode={darkMode} lang={lang} message={`${t.confirmDelete} "${modalData.folder?.name}"?`}
+          onConfirm={()=>doDeleteFolder(modalData.folder)} onCancel={()=>setModal(null)} />
+      )}
+
+      {/* Rename */}
+      {modal==='rename' && (
+        <RenameModal darkMode={darkMode} lang={lang} item={modalData.item} isFolder={modalData.isFolder}
+          t={t} input={input} text={text} sub={sub} onClose={()=>setModal(null)} onRename={doRename} />
+      )}
+
+      {/* Confirm same name on save */}
+      {modal==='confirmSave' && (
+        <ConfirmModal darkMode={darkMode} lang={lang} message={t.confirmSave}
+          onConfirm={()=>{ doUploadFile(modalData.file, modalData.type); setModal(null); }}
+          onCancel={()=>setModal(null)} />
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed bottom-5 right-5 z-50 px-4 py-3 rounded-xl shadow-xl text-sm fade-in ${toast.type==='error'?'bg-red-600 text-white':toast.type==='warn'?'bg-amber-500 text-white':'bg-green-600 text-white'}`}>
+          {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== FOLDER CARD ==========
+function FolderCard({ folder, darkMode, text, sub, card, hover, lang, onOpen, onDelete, onLock, onRename, onSubFolder }) {
+  const t = T[lang];
+  const [showMenu, setShowMenu] = useState(false);
+  return (
+    <div className={`${card} border rounded-xl p-3 group relative cursor-pointer ${hover} smooth`} onClick={()=>{ setShowMenu(false); onOpen(folder); }}>
+      {folder.isLocked && <span className="absolute top-2 right-2 text-red-400 locked-badge">🔒</span>}
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-2xl">📁</span>
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-semibold truncate ${text}`}>{folder.name}</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 smooth" onClick={e=>e.stopPropagation()}>
+        <button onClick={onLock} className="p-1 rounded text-amber-400 hover:bg-amber-400/10 smooth" title={folder.isLocked?t.unlock:t.lock}>
+          {folder.isLocked?<Icon.Unlock/>:<Icon.Lock/>}
+        </button>
+        <button onClick={onSubFolder} className="p-1 rounded text-blue-400 hover:bg-blue-400/10 smooth" title={t.subFolder}><Icon.FolderPlus/></button>
+        <button onClick={onDelete} className="p-1 rounded text-red-400 hover:bg-red-400/10 smooth" title={t.delete}><Icon.Trash/></button>
+      </div>
+    </div>
+  );
+}
+
+// ========== FILE CARD ==========
+function FileCard({ file, darkMode, text, sub, card, hover, lang, viewMode, onDelete, onFavorite, onPreview, onDownload, onLock, onRename }) {
+  const t = T[lang];
+  if (viewMode === 'list') {
+    return (
+      <div className={`${card} border rounded-xl px-4 py-2.5 flex items-center gap-3 group ${hover} smooth`}>
+        {file.isPrivate ? (
+          <span className="text-xl locked-badge">🔒</span>
+        ) : file.type==='image' && file.dataUrl ? (
+          <img src={file.dataUrl} alt={file.name} className="w-8 h-8 rounded object-cover"/>
+        ) : file.type==='video' && file.dataUrl ? (
+          <span className="text-xl">🎬</span>
+        ) : (
+          <span className="text-xl">{getFileIcon(file.type)}</span>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-medium truncate ${text}`}>{file.name}</p>
+          <p className={`text-xs ${sub}`}>{file.size} · {file.date}</p>
+        </div>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 smooth">
+          <button onClick={onFavorite} className={`p-1 rounded smooth ${file.isFavorite?'text-yellow-400':'text-slate-500'} hover:bg-yellow-400/10`}><Icon.Star fill={file.isFavorite}/></button>
+          <button onClick={onPreview} className="p-1 rounded text-blue-400 hover:bg-blue-400/10 smooth"><Icon.Eye/></button>
+          <button onClick={onDownload} className="p-1 rounded text-green-400 hover:bg-green-400/10 smooth"><Icon.Download/></button>
+          <button onClick={onLock} className={`p-1 rounded smooth ${file.isPrivate?'text-red-400 hover:bg-red-400/10':'text-slate-500 hover:bg-slate-500/10'}`}>{file.isPrivate?<Icon.Lock/>:<Icon.Unlock/>}</button>
+          <button onClick={onDelete} className="p-1 rounded text-red-400 hover:bg-red-400/10 smooth"><Icon.Trash/></button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className={`${card} border rounded-xl p-3 group ${hover} smooth relative`}>
+      {file.isPrivate && <span className="absolute top-2 right-2 text-red-400 locked-badge text-sm">🔒</span>}
+      {/* Thumbnail */}
+      {!file.isPrivate && file.type==='image' && file.dataUrl ? (
+        <img src={file.dataUrl} alt={file.name} className="thumbnail-img cursor-pointer" onClick={onPreview}/>
+      ) : !file.isPrivate && file.type==='video' && file.dataUrl ? (
+        <video className="thumbnail-vid" onClick={onPreview} style={{cursor:'pointer'}}>
+          <source src={file.dataUrl}/>
+        </video>
+      ) : (
+        <div className="text-3xl text-center mb-2 cursor-pointer" onClick={onPreview}>
+          {file.isPrivate ? '🔒' : getFileIcon(file.type)}
+        </div>
+      )}
+      <p className={`text-xs font-medium truncate mb-1 ${text}`}>{file.name}</p>
+      <p className={`text-xs mb-2 ${sub}`}>{file.size}</p>
+      <div className="flex items-center justify-between opacity-0 group-hover:opacity-100 smooth">
+        <button onClick={onFavorite} className={`p-1 rounded smooth ${file.isFavorite?'text-yellow-400':'text-slate-500'}`}><Icon.Star fill={file.isFavorite}/></button>
+        <button onClick={onPreview} className="p-1 rounded text-blue-400 hover:bg-blue-400/10 smooth"><Icon.Eye/></button>
+        <button onClick={onDownload} className="p-1 rounded text-green-400 hover:bg-green-400/10 smooth"><Icon.Download/></button>
+        <button onClick={onLock} className={`p-1 rounded smooth ${file.isPrivate?'text-red-400':'text-slate-500'}`}>{file.isPrivate?<Icon.Lock/>:<Icon.Unlock/>}</button>
+        <button onClick={onDelete} className="p-1 rounded text-red-400 hover:bg-red-400/10 smooth"><Icon.Trash/></button>
+      </div>
+    </div>
+  );
+}
+
+// ========== NEW FOLDER MODAL ==========
+function NewFolderModal({ darkMode, lang, parentId, onClose, onCreate, t, input, text, sub }) {
+  const [name, setName] = useState('');
+  const [color, setColor] = useState('#3B82F6');
+  return (
+    <Modal darkMode={darkMode} onClose={onClose}>
+      <h3 className={`text-base font-bold mb-4 ${text}`}>{parentId !== null ? t.subFolder : t.newFolder}</h3>
+      <div className="space-y-3">
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder={t.folderName}
+          className={`w-full px-4 py-2.5 rounded-xl border focus:outline-none focus:border-blue-500 ${input}`}/>
+        <div className="flex items-center gap-2">
+          <label className={`text-sm ${sub}`}>Color:</label>
+          {['#3B82F6','#EC4899','#8B5CF6','#10B981','#F59E0B','#EF4444'].map(c => (
+            <button key={c} onClick={()=>setColor(c)}
+              className={`w-6 h-6 rounded-full smooth ${color===c?'ring-2 ring-offset-2 ring-offset-slate-900 ring-white':''}`}
+              style={{backgroundColor:c}}/>
+          ))}
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className={`flex-1 py-2.5 rounded-xl smooth ${darkMode?'bg-slate-700 text-slate-300 hover:bg-slate-600':'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}>{t.cancel}</button>
+          <button onClick={()=>{ if(name.trim()) onCreate(name, color, parentId); }}
+            className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl smooth">{t.createFolder}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ========== RENAME MODAL ==========
+function RenameModal({ darkMode, lang, item, isFolder, t, input, text, sub, onClose, onRename }) {
+  const [value, setValue] = useState(item.name);
+  return (
+    <Modal darkMode={darkMode} onClose={onClose}>
+      <h3 className={`text-base font-bold mb-4 ${text}`}>{t.rename}</h3>
+      <input value={value} onChange={e=>setValue(e.target.value)} className={`w-full px-4 py-2.5 rounded-xl border focus:outline-none focus:border-blue-500 mb-4 ${input}`}/>
+      <div className="flex gap-2">
+        <button onClick={onClose} className={`flex-1 py-2 rounded-xl smooth ${darkMode?'bg-slate-700 text-slate-300':'bg-slate-200 text-slate-700'}`}>{t.cancel}</button>
+        <button onClick={()=>onRename(item, isFolder, value)} className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl smooth">{t.save}</button>
+      </div>
+    </Modal>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+</body>
+</html>
