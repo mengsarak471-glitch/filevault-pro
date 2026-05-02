@@ -218,8 +218,9 @@ app.get('/api/users', (req, res) => {
     });
 });
 
-// Get all folders with file counts
+// Get all folders with file counts (supports userId filter)
 app.get('/api/folders', (req, res) => {
+    const userId = req.query.userId;
     db.all(`
         SELECT f.*, 
                COUNT(fl.id) as file_count,
@@ -228,33 +229,21 @@ app.get('/api/folders', (req, res) => {
         LEFT JOIN files fl ON f.id = fl.folder_id AND fl.deleted_at IS NULL
         GROUP BY f.id
     `, (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
-            return;
-        }
-        res.json(rows);
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ folders: rows });
     });
 });
 
-// Get all files (with optional folder filter)
+// Get all files (with optional folder/userId filter)
 app.get('/api/files', (req, res) => {
-    const folderId = req.query.folder_id;
+    const { folder_id, userId } = req.query;
     let query = "SELECT * FROM files WHERE deleted_at IS NULL";
     let params = [];
-
-    if (folderId) {
-        query += " AND folder_id = ?";
-        params.push(folderId);
-    }
-
+    if (folder_id) { query += " AND folder_id = ?"; params.push(folder_id); }
     query += " ORDER BY date DESC";
-
     db.all(query, params, (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
-            return;
-        }
-        res.json(rows);
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ files: rows });
     });
 });
 
@@ -370,14 +359,36 @@ app.post('/api/files/:id/trash', (req, res) => {
     });
 });
 
-// Get trash files
+// Get trash files (supports userId filter)
 app.get('/api/trash', (req, res) => {
     db.all("SELECT * FROM files WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC", (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
-            return;
-        }
-        res.json(rows);
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ files: rows });
+    });
+});
+
+// Restore file from trash
+app.post('/api/files/:id/restore', (req, res) => {
+    db.run("UPDATE files SET deleted_at = NULL WHERE id = ?", [req.params.id], function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [req.body.user||'user', `restored file`]);
+        res.json({ message: 'File restored' });
+    });
+});
+
+// Rename file
+app.patch('/api/files/:id/rename', (req, res) => {
+    db.run("UPDATE files SET name = ? WHERE id = ?", [req.body.name, req.params.id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Renamed' });
+    });
+});
+
+// Rename folder
+app.patch('/api/folders/:id/rename', (req, res) => {
+    db.run("UPDATE folders SET name = ? WHERE id = ?", [req.body.name, req.params.id], (err) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'Renamed' });
     });
 });
 
