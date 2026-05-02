@@ -4,6 +4,15 @@ const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const fs = require('fs');
+const cloudinary = require('cloudinary').v2;
+const { Readable } = require('stream');
+
+// Cloudinary config
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'debxadxsr',
+    api_key: process.env.CLOUDINARY_API_KEY || '786599253482319',
+    api_secret: process.env.CLOUDINARY_API_SECRET || '4ZDG7pboBDuMvQ53SOYkBuJ36cI',
+});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -59,7 +68,8 @@ db.serialize(() => {
         uploaded_by TEXT NOT NULL,
         is_favorite BOOLEAN DEFAULT 0,
         version INTEGER DEFAULT 1,
-        file_path TEXT NOT NULL,
+        file_path TEXT,
+        file_url TEXT,
         deleted_at DATETIME,
         FOREIGN KEY (folder_id) REFERENCES folders (id)
     )`);
@@ -121,23 +131,22 @@ db.serialize(() => {
     });
 });
 
-// Multer configuration for file uploads
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, 'uploads/');
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, uniqueSuffix + '-' + file.originalname);
-    }
+// Multer - memory storage (upload to Cloudinary)
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 100 * 1024 * 1024 }
 });
 
-const upload = multer({ 
-    storage: storage,
-    limits: {
-        fileSize: 100 * 1024 * 1024 // 100MB limit
-    }
-});
+// Upload buffer to Cloudinary
+const uploadToCloudinary = (buffer, filename) => {
+    return new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+            { resource_type: 'auto', public_id: `filevault/${Date.now()}-${filename}` },
+            (error, result) => { if (error) reject(error); else resolve(result); }
+        );
+        Readable.from(buffer).pipe(stream);
+    });
+};
 
 // Helper function to format file size
 function formatFileSize(bytes) {
@@ -258,65 +267,40 @@ app.get('/api/files/:id/versions', (req, res) => {
     });
 });
 
-// Upload file (supports multipart OR JSON with dataUrl)
-app.post('/api/files/upload', (req, res, next) => {
-    // If JSON body with dataUrl, skip multer
-    if (req.is('application/json')) return next();
-    upload.single('file')(req, res, next);
-}, (req, res) => {
-    // JSON upload (dataUrl from frontend)
-    if (req.is('application/json')) {
-        const { name, type, size, folderId, userId, dataUrl } = req.body;
-        if (!name) return res.status(400).json({ error: 'No file data' });
-
-        // Save dataUrl as file on disk
-        const filename = Date.now() + '-' + name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const filePath = path.join('uploads', filename);
-        let sizeBytes = 0;
-
-        try {
-            if (dataUrl && dataUrl.includes(',')) {
-                const base64Data = dataUrl.split(',')[1];
-                const buffer = Buffer.from(base64Data, 'base64');
-                sizeBytes = buffer.length;
-                fs.writeFileSync(filePath, buffer);
-            }
-        } catch(e) { console.warn('Could not save dataUrl to disk:', e.message); }
-
-        db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, date, uploaded_by, file_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [name, type || 'document', size || '0 B', sizeBytes, folderId || null,
-             new Date().toISOString().split('T')[0], userId ? String(userId) : 'Unknown', filePath],
-            function(err) {
-                if (err) return res.status(500).json({ error: err.message });
-                db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [String(userId||'user'), `uploaded "${name}"`]);
-                res.json({ id: this.lastID, name, type, size, folderId, is_favorite: false, version: 1 });
-            }
-        );
-        return;
-    }
-
-    // Multipart upload
+// Upload file → Cloudinary
+app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const { folder_id, uploaded_by } = req.body;
     const file = req.file;
-    const fileInfo = {
-        name: file.originalname, type: getFileType(file.originalname),
-        size: formatFileSize(file.size), size_bytes: file.size,
-        folder_id: folder_id || null, date: new Date().toISOString().split('T')[0],
-        uploaded_by: uploaded_by || 'Unknown', file_path: file.path
-    };
-    db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, date, uploaded_by, file_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [fileInfo.name, fileInfo.type, fileInfo.size, fileInfo.size_bytes,
-         fileInfo.folder_id, fileInfo.date, fileInfo.uploaded_by, fileInfo.file_path],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [fileInfo.uploaded_by, `uploaded "${fileInfo.name}"`]);
-            if (fileInfo.folder_id) db.run("UPDATE folders SET used = used + ? WHERE id = ?", [fileInfo.size_bytes, fileInfo.folder_id]);
-            res.json({ id: this.lastID, ...fileInfo, is_favorite: false, version: 1 });
-        }
-    );
+    try {
+        // Upload to Cloudinary
+        const cloudResult = await uploadToCloudinary(file.buffer, file.originalname);
+        const fileInfo = {
+            name: file.originalname,
+            type: getFileType(file.originalname),
+            size: formatFileSize(file.size),
+            size_bytes: file.size,
+            folder_id: folder_id || null,
+            date: new Date().toISOString().split('T')[0],
+            uploaded_by: uploaded_by || 'Unknown',
+            file_url: cloudResult.secure_url,
+            file_path: cloudResult.public_id,
+        };
+        db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, date, uploaded_by, file_path, file_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [fileInfo.name, fileInfo.type, fileInfo.size, fileInfo.size_bytes,
+             fileInfo.folder_id, fileInfo.date, fileInfo.uploaded_by, fileInfo.file_path, fileInfo.file_url],
+            function(err) {
+                if (err) return res.status(500).json({ error: err.message });
+                db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [fileInfo.uploaded_by, `uploaded "${fileInfo.name}"`]);
+                if (fileInfo.folder_id) db.run("UPDATE folders SET used = used + ? WHERE id = ?", [fileInfo.size_bytes, fileInfo.folder_id]);
+                res.json({ id: this.lastID, ...fileInfo, is_favorite: false, version: 1 });
+            }
+        );
+    } catch(e) {
+        console.error('Cloudinary upload error:', e);
+        res.status(500).json({ error: 'Upload failed: ' + e.message });
+    }
 });
 
 // Delete file via DELETE method (used by frontend)
