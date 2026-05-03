@@ -61,7 +61,19 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors({
-    origin: ['https://filevault-pro.netlify.app', 'https://dancing-hotteok-8c0bc9.netlify.app', 'https://incomparable-naiad-5652c7.netlify.app', 'http://localhost:5500', 'http://127.0.0.1:5500'],
+    origin: (origin, callback) => {
+        const allowed = [
+            'https://filevault-pro.netlify.app',
+            'https://dancing-hotteok-8c0bc9.netlify.app',
+            'https://incomparable-naiad-5652c7.netlify.app',
+        ];
+        // Allow localhost and null (file://) in development
+        if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') || allowed.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(null, true); // Allow all for now - tighten in production
+        }
+    },
     credentials: true,
 }));
 app.use(express.json());

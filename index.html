@@ -35,16 +35,21 @@ const { useState, useEffect, useCallback, useRef } = React;
 
 // ========== API CONFIG ==========
 const API_URL = "https://filevault-pro-backend.onrender.com/api";
-
 const apiFetch = async (path, options = {}) => {
   const token = localStorage.getItem('fv_token');
   const isFormData = options.body instanceof FormData;
   const headers = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
+    'X-Client-Version': '2.0',
     ...(options.headers || {})
   };
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  if (res.status === 401) {
+    localStorage.removeItem('fv_token');
+    window.location.reload();
+    throw new Error('Session expired. Please login again.');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }));
     throw new Error(err.message || 'API error');
@@ -212,12 +217,39 @@ const defaultUsers = [
 ];
 
 // ========== HELPER ==========
-function getFileIcon(type) {
-  if (type === 'pdf') return '📄';
+function getFileIcon(type, name) {
+  const ext = (name || '').split('.').pop().toLowerCase();
+  // Specific app icons
+  if (ext === 'pdf') return '📕';
+  if (['doc','docx'].includes(ext)) return '📘';
+  if (['xls','xlsx','csv'].includes(ext)) return '📗';
+  if (['ppt','pptx'].includes(ext)) return '📙';
+  if (['zip','rar','7z','tar','gz'].includes(ext)) return '🗜️';
+  if (['mp4','avi','mov','mkv','webm'].includes(ext)) return '🎬';
+  if (['mp3','wav','aac','flac'].includes(ext)) return '🎵';
+  if (['png','jpg','jpeg','gif','bmp','svg','webp'].includes(ext)) return '🖼️';
+  if (['txt'].includes(ext)) return '📝';
+  if (['js','ts','jsx','tsx','py','java','cpp','cs','html','css','json'].includes(ext)) return '💻';
+  if (['exe','msi','apk'].includes(ext)) return '⚙️';
+  // Fallback by type
+  if (type === 'pdf') return '📕';
   if (type === 'image') return '🖼️';
   if (type === 'video') return '🎬';
-  if (type === 'document') return '📋';
-  return '📁';
+  if (type === 'document') return '📘';
+  return '📄';
+}
+
+function getFileColor(type, name) {
+  const ext = (name || '').split('.').pop().toLowerCase();
+  if (ext === 'pdf') return '#E53E3E';
+  if (['doc','docx'].includes(ext)) return '#2B5CE6';
+  if (['xls','xlsx','csv'].includes(ext)) return '#1D7A45';
+  if (['ppt','pptx'].includes(ext)) return '#D24726';
+  if (['zip','rar','7z'].includes(ext)) return '#8B5CF6';
+  if (['mp4','avi','mov','mkv'].includes(ext)) return '#DD6B20';
+  if (['mp3','wav'].includes(ext)) return '#D53F8C';
+  if (['png','jpg','jpeg','gif'].includes(ext)) return '#0EA5E9';
+  return '#64748B';
 }
 
 function daysInTrash(deletedAt) {
@@ -300,9 +332,8 @@ function App() {
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [viewMode, setViewMode] = useState('grid');
 
-  // State - files/folders fetched from API (not localStorage)
-  const saved = loadFromStorage();
-  const [users, setUsers] = useState(saved?.users || defaultUsers);
+  // State - always fetch from API, never localStorage for files/folders
+  const [users, setUsers] = useState(defaultUsers);
   const [userFolders, setUserFolders] = useState({});
   const [userFiles, setUserFiles] = useState({});
   const [userTrash, setUserTrash] = useState({});
@@ -332,44 +363,79 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState({});
   const [toast, setToast] = useState(null);
 
+  // Users page state (must be at top level, not inside render)
+  const [apiUsers, setApiUsers] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const [activeTab, setActiveTab] = useState('users');
+  const [editingUser, setEditingUser] = useState(null);
+  const [editForm, setEditForm] = useState({});
+
   const t = T[lang];
   const fontClass = lang === 'kh' ? 'font-kh' : 'font-en';
 
   // ===== CURRENT USER DATA =====
-  const currentUserFolders = userFolders[user?.id] || [];
-  const currentUserFiles = userFiles[user?.id] || [];
-  const currentUserTrash = userTrash[user?.id] || [];
+  // Map API fields to frontend fields
+  const mapFile = (f) => ({
+    ...f,
+    folderId: f.folder_id !== undefined ? f.folder_id : f.folderId,
+    isFavorite: f.is_favorite !== undefined ? !!f.is_favorite : f.isFavorite,
+    uploadedBy: f.uploaded_by !== undefined ? f.uploaded_by : f.uploadedBy,
+    dataUrl: f.file_url || f.dataUrl || null,
+    isPrivate: f.is_private !== undefined ? !!f.is_private : (f.isPrivate || false),
+    pin: f.pin || '',
+    deletedAt: f.deleted_at || f.deletedAt || null,
+  });
+  const mapFolder = (f) => ({
+    ...f,
+    id: f.id,
+    name: f.name,
+    color: f.color || '#3B82F6',
+    icon: f.icon || '📁',
+    parentId: f.parent_id !== undefined ? f.parent_id : (f.parentId !== undefined ? f.parentId : null),
+    isLocked: f.is_locked !== undefined ? !!f.is_locked : (f.isLocked || false),
+    pin: f.pin || '',
+  });
 
-  // ===== FETCH ALL DATA FROM API =====
+  const currentUserFolders = (userFolders[user?.id] || []).map(mapFolder);
+  const currentUserFiles = (userFiles[user?.id] || []).map(mapFile);
+  const currentUserTrash = (userTrash[user?.id] || []).map(mapFile);
+
+  // ===== FETCH FROM API =====
   const fetchData = async (uid) => {
     if (!uid) return;
-    setApiLoading(true);
     try {
       const [fRes, fiRes, tRes] = await Promise.all([
         apiFetch(`/folders?userId=${uid}`),
         apiFetch(`/files?userId=${uid}`),
         apiFetch(`/trash?userId=${uid}`),
       ]);
-      setUserFolders(prev => ({ ...prev, [uid]: fRes.folders || fRes || [] }));
-      setUserFiles(prev => ({ ...prev, [uid]: fiRes.files || fiRes || [] }));
-      setUserTrash(prev => ({ ...prev, [uid]: tRes.files || tRes || [] }));
-    } catch(e) {
-      console.warn('[API] fetchData failed:', e.message);
-    } finally {
-      setApiLoading(false);
-    }
+      const folders = Array.isArray(fRes) ? fRes : (fRes.folders || []);
+      const files = Array.isArray(fiRes) ? fiRes : (fiRes.files || []);
+      const trash = Array.isArray(tRes) ? tRes : (tRes.files || []);
+      // Deduplicate by id
+      const dedup = (arr) => arr.filter((v,i,a) => a.findIndex(x=>x.id===v.id)===i);
+      setUserFolders(prev => ({ ...prev, [uid]: dedup(folders) }));
+      setUserFiles(prev => ({ ...prev, [uid]: dedup(files) }));
+      setUserTrash(prev => ({ ...prev, [uid]: dedup(trash) }));
+    } catch(e) { console.warn('[API] fetchData failed:', e.message); }
   };
 
   useEffect(() => {
-    if (isLoggedIn && user) {
-      fetchData(user.id);
-      // Poll every 10 seconds for real-time sync
-      const interval = setInterval(() => fetchData(user.id), 10000);
-      return () => clearInterval(interval);
-    }
+    if (!isLoggedIn || !user) return;
+    fetchData(user.id);
+    const iv = setInterval(() => fetchData(user.id), 8000);
+    return () => clearInterval(iv);
   }, [isLoggedIn, user?.id]);
 
-  // Auto-clean trash > 30 days
+  // Fetch users and activities when on users page
+  useEffect(() => {
+    if (currentPage === 'users') {
+      apiFetch('/users').then(data => setApiUsers(Array.isArray(data) ? data : [])).catch(()=>{});
+      apiFetch('/activities?limit=50').then(data => setActivities(Array.isArray(data) ? data : [])).catch(()=>{});
+    }
+  }, [currentPage]);
+
+  // Auto-clean trash > 30 days (local only)
   useEffect(() => {
     if (!user) return;
     const cleaned = currentUserTrash.filter(f => daysInTrash(f.deletedAt) < 30);
@@ -393,13 +459,9 @@ function App() {
         body: JSON.stringify({ username: loginForm.username, password: loginForm.password }),
       });
       if (data.token) localStorage.setItem('fv_token', data.token);
-      const loggedUser = data.user || users.find(u => u.username === loginForm.username);
-      if (loggedUser) {
-        setUser(loggedUser);
-        setIsLoggedIn(true);
-      } else {
-        setLoginError('Invalid username or password');
-      }
+      const loggedUser = data.user || { id: loginForm.username, name: loginForm.username, username: loginForm.username, role: 'user' };
+      setUser(loggedUser);
+      setIsLoggedIn(true);
     } catch(err) {
       setLoginError(err.message || 'Invalid username or password');
     }
@@ -461,10 +523,21 @@ function App() {
 
   const handleCreateFolder = async (name, color, parentId) => {
     if (!name.trim()) return;
+    // Check duplicate name in same parent
+    const existingFolders = userFolders[user.id] || [];
+    const pid = parentId !== undefined ? parentId : null;
+    const dup = existingFolders.find(f => {
+      const fp = f.parent_id !== undefined ? f.parent_id : (f.parentId !== undefined ? f.parentId : null);
+      return f.name.toLowerCase() === name.trim().toLowerCase() && fp === pid;
+    });
+    if (dup) {
+      showToast('⚠️ Folder with this name already exists!', 'warn');
+      return;
+    }
     try {
-      const data = await apiFetch('/folders', {
+      await apiFetch('/folders', {
         method: 'POST',
-        body: JSON.stringify({ name, color: color||'#3B82F6', icon: '📁', parentId, userId: user.id }),
+        body: JSON.stringify({ name: name.trim(), color: color||'#3B82F6', icon: '📁', parentId: pid, parent_id: pid, userId: user.id }),
       });
       await fetchData(user.id);
       setModal(null);
@@ -483,7 +556,7 @@ function App() {
       await fetchData(user.id);
       if (currentFolderId === folder.id) navigate('dashboard', null, []);
       setModal(null);
-      showToast(`Folder "${folder.name}" deleted`);
+      showToast(`Folder deleted`);
     } catch(e) { showToast(e.message, 'error'); }
   };
 
@@ -536,15 +609,13 @@ function App() {
       formData.append('file', file);
       formData.append('folder_id', currentFolderId || '');
       formData.append('uploaded_by', user.name);
-      formData.append('userId', user.id);
-
-      // Simulate progress
+      formData.append('userId', String(user.id));
+      formData.append('user_id', String(user.id));
       let prog = 10;
       const iv = setInterval(() => {
-        prog = Math.min(prog + 20, 85);
+        prog = Math.min(prog + 15, 85);
         setUploadProgress(prev => ({ ...prev, [id]: prog }));
-      }, 200);
-
+      }, 300);
       await apiFetch('/files/upload', { method: 'POST', body: formData });
       clearInterval(iv);
       setUploadProgress(prev => ({ ...prev, [id]: 100 }));
@@ -560,6 +631,14 @@ function App() {
   const handleDeleteFile = (file) => {
     setModal('confirmDeleteFile');
     setModalData({ file });
+  };
+
+  const handlePermanentDelete = async (file) => {
+    try {
+      await apiFetch(`/files/${file.id}/permanent`, { method: 'DELETE' });
+      await fetchData(user.id);
+      showToast(`"${file.name}" permanently deleted`);
+    } catch(e) { showToast(e.message, 'error'); }
   };
 
   const doDeleteFile = async (file) => {
@@ -624,13 +703,18 @@ function App() {
   };
 
   const handleDownload = (file) => {
-    if (file.dataUrl) {
+    const url = file.dataUrl || file.file_url;
+    if (url) {
       const a = document.createElement('a');
-      a.href = file.dataUrl;
+      a.href = url;
       a.download = file.name;
+      a.target = '_blank';
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
+      showToast(`Downloading "${file.name}"...`);
     } else {
-      showToast('No downloadable content for demo files', 'warn');
+      showToast('File URL not available', 'warn');
     }
   };
 
@@ -642,8 +726,8 @@ function App() {
   const doRename = async (item, isFolder, newName) => {
     if (!newName.trim() || newName === item.name) { setModal(null); return; }
     try {
-      const endpoint = isFolder ? `/folders/${item.id}/rename` : `/files/${item.id}/rename`;
-      await apiFetch(endpoint, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
+      const ep = isFolder ? `/folders/${item.id}/rename` : `/files/${item.id}/rename`;
+      await apiFetch(ep, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
       await fetchData(user.id);
       setModal(null);
       showToast('Renamed successfully');
@@ -665,15 +749,23 @@ function App() {
   };
 
   // ===== FILTER FILES =====
+  // Fix: define toId before use
+  const toId = (v) => (v === null || v === undefined) ? null : String(v);
+
   const currentFiles = currentUserFiles.filter(f => {
-    if (f.folderId !== currentFolderId) return false;
+    const fFid = toId(f.folderId);
+    const cFid = toId(currentFolderId);
+    if (fFid !== cFid) return false;
     if (filterType !== 'all' && f.type !== filterType) return false;
     if (searchQuery && !f.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
 
+  // Fix: compare as same type (both convert to string/null)
   const currentSubFolders = currentUserFolders.filter(f => {
-    if (f.parentId !== currentFolderId) return false;
+    const fPid = toId(f.parentId);
+    const cFid = toId(currentFolderId);
+    if (fPid !== cFid) return false;
     if (searchQuery && !f.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
@@ -695,7 +787,9 @@ function App() {
   const sidebarItems = [
     { icon: Icon.Home, label: t.dashboard, page: 'dashboard', onClick: () => navigate('dashboard', null, []) },
     { icon: Icon.Star, label: t.favorites, page: 'favorites', onClick: () => { setCurrentPage('favorites'); } },
-    { icon: Icon.Folder, label: t.allFiles, page: 'files', onClick: () => navigate('dashboard', null, []) },
+    { icon: Icon.Download, label: t.downloads, page: 'downloads', onClick: () => setCurrentPage('downloads') },
+    { icon: Icon.Video, label: t.videos, page: 'videos', onClick: () => setCurrentPage('videos') },
+    { icon: Icon.Image, label: t.pictures, page: 'pictures', onClick: () => setCurrentPage('pictures') },
     { icon: Icon.Clock, label: t.recent, page: 'recent', onClick: () => setCurrentPage('recent') },
     { icon: Icon.Trash, label: t.trash, page: 'trash', onClick: () => setCurrentPage('trash') },
     ...(user?.role==='admin' ? [
@@ -746,22 +840,10 @@ function App() {
               <button type="submit" className="w-full py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold rounded-xl transition shadow-lg mt-2">{t.login}</button>
             </form>
 
-            <div className={`mt-5 p-3 rounded-xl text-sm ${darkMode?'bg-slate-800 text-slate-400':'bg-slate-100 text-slate-600'}`}>
-              👑 <strong>admin</strong> / admin &nbsp;|&nbsp; 👤 john,sarah,mike,lisa / 1234
+            <div className={`mt-5 p-3 rounded-xl text-xs ${darkMode?'bg-slate-800/50 text-slate-500':'bg-slate-100 text-slate-400'} text-center`}>
+              🔒 Contact your administrator for access
             </div>
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ===== LOADING OVERLAY =====
-  if (apiLoading && Object.keys(userFiles).length === 0) {
-    return (
-      <div className={`min-h-screen ${bg} ${fontClass} flex items-center justify-center`}>
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className={sub}>Loading your files...</p>
         </div>
       </div>
     );
@@ -796,6 +878,57 @@ function App() {
           )}
           {searchResults.length===0 && searchFolderResults.length===0 && (
             <p className={sub}>{t.noFiles}</p>
+          )}
+        </div>
+      );
+    }
+
+    if (currentPage === 'downloads') {
+      const dlFiles = currentUserFiles.filter(f => !searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase()));
+      return (
+        <div className="fade-in">
+          <h3 className={`text-base font-semibold mb-4 ${text}`}>⬇️ {t.downloads}</h3>
+          {dlFiles.length===0 ? <p className={sub}>{t.noFiles}</p> : (
+            <div className={viewMode==='grid'?'grid grid-cols-2 md:grid-cols-4 gap-3':'space-y-2'}>
+              {dlFiles.map(f => <FileCard key={f.id} file={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang} viewMode={viewMode}
+                onDelete={()=>handleDeleteFile(f)} onFavorite={()=>handleToggleFavorite(f.id)}
+                onPreview={()=>{ if(f.isPrivate) handleViewPrivateFile(f); else {setModal('preview');setModalData({file:f});}}}
+                onDownload={()=>handleDownload(f)} onLock={()=>handleLockFile(f)} onRename={()=>handleRenameItem(f,false)} />)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (currentPage === 'videos') {
+      const vidFiles = currentUserFiles.filter(f => f.type==='video' && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase())));
+      return (
+        <div className="fade-in">
+          <h3 className={`text-base font-semibold mb-4 ${text}`}>🎬 {t.videos}</h3>
+          {vidFiles.length===0 ? <p className={sub}>{t.noFiles}</p> : (
+            <div className={viewMode==='grid'?'grid grid-cols-2 md:grid-cols-4 gap-3':'space-y-2'}>
+              {vidFiles.map(f => <FileCard key={f.id} file={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang} viewMode={viewMode}
+                onDelete={()=>handleDeleteFile(f)} onFavorite={()=>handleToggleFavorite(f.id)}
+                onPreview={()=>{ if(f.isPrivate) handleViewPrivateFile(f); else {setModal('preview');setModalData({file:f});}}}
+                onDownload={()=>handleDownload(f)} onLock={()=>handleLockFile(f)} onRename={()=>handleRenameItem(f,false)} />)}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (currentPage === 'pictures') {
+      const picFiles = currentUserFiles.filter(f => f.type==='image' && (!searchQuery || f.name.toLowerCase().includes(searchQuery.toLowerCase())));
+      return (
+        <div className="fade-in">
+          <h3 className={`text-base font-semibold mb-4 ${text}`}>🖼️ {t.pictures}</h3>
+          {picFiles.length===0 ? <p className={sub}>{t.noFiles}</p> : (
+            <div className={viewMode==='grid'?'grid grid-cols-2 md:grid-cols-4 gap-3':'space-y-2'}>
+              {picFiles.map(f => <FileCard key={f.id} file={f} darkMode={darkMode} text={text} sub={sub} card={card} hover={hover} lang={lang} viewMode={viewMode}
+                onDelete={()=>handleDeleteFile(f)} onFavorite={()=>handleToggleFavorite(f.id)}
+                onPreview={()=>{ if(f.isPrivate) handleViewPrivateFile(f); else {setModal('preview');setModalData({file:f});}}}
+                onDownload={()=>handleDownload(f)} onLock={()=>handleLockFile(f)} onRename={()=>handleRenameItem(f,false)} />)}
+            </div>
           )}
         </div>
       );
@@ -852,7 +985,7 @@ function App() {
                     <p className={`text-xs ${sub}`}>{30 - daysInTrash(f.deletedAt)} {t.daysLeft}</p>
                   </div>
                   <button onClick={()=>handleRestoreFile(f)} className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-xs rounded-lg smooth">{t.restore}</button>
-                  <button onClick={()=>setUserTrash(prev=>({...prev,[user.id]:prev[user.id].filter(x=>x.id!==f.id)}))} className="px-3 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs rounded-lg smooth">{t.delete}</button>
+                  <button onClick={()=>handlePermanentDelete(f)} className="px-3 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs rounded-lg smooth">{t.delete} 🗑️</button>
                 </div>
               ))}
             </div>
@@ -862,26 +995,77 @@ function App() {
     }
 
     if (currentPage === 'users') {
+      const handleEditUser = (u) => {
+        setEditingUser(u.id);
+        setEditForm({ name: u.name, username: u.username, password: '', dept: u.dept||'', email: u.email||'' });
+      };
+      const handleSaveUser = async (u) => {
+        try {
+          await apiFetch(`/users/${u.id}`, { method: 'PATCH', body: JSON.stringify(editForm) });
+          const updated = await apiFetch('/users');
+          setApiUsers(Array.isArray(updated) ? updated : []);
+          setEditingUser(null);
+          showToast('User updated!');
+        } catch(e) { showToast(e.message, 'error'); }
+      };
+
       return (
         <div className="fade-in">
-          <h3 className={`text-base font-semibold mb-4 ${text}`}>👥 {t.users}</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {users.map(u => (
-              <div key={u.id} className={`${card} border rounded-xl p-4 flex items-center gap-4`}>
-                <div className="w-12 h-12 rounded-full overflow-hidden bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-                  {u.avatar ? <img src={u.avatar} alt={u.name} className="w-full h-full object-cover"/> : <span className="text-white font-bold text-lg">{u.name[0]}</span>}
-                </div>
-                <div className="flex-1">
-                  <p className={`font-semibold ${text}`}>{u.name}</p>
-                  <p className={`text-xs ${sub}`}>{u.role==='admin'?'👑 Admin':'👤 User'} · {u.dept}</p>
-                  <p className={`text-xs ${sub}`}>{u.email}</p>
-                </div>
-                <div className={`text-xs px-2 py-1 rounded ${darkMode?'bg-slate-800 text-slate-400':'bg-slate-200 text-slate-600'}`}>
-                  {currentUserFiles.length} files
-                </div>
-              </div>
-            ))}
+          <div className="flex gap-2 mb-4">
+            <button onClick={()=>setActiveTab('users')} className={`px-4 py-2 rounded-lg text-sm smooth ${activeTab==='users'?'bg-blue-600 text-white':darkMode?'bg-slate-800 text-slate-300':'bg-slate-200 text-slate-700'}`}>👥 {t.users}</button>
+            <button onClick={()=>setActiveTab('activity')} className={`px-4 py-2 rounded-lg text-sm smooth ${activeTab==='activity'?'bg-blue-600 text-white':darkMode?'bg-slate-800 text-slate-300':'bg-slate-200 text-slate-700'}`}>📋 {t.activityLog}</button>
           </div>
+
+          {activeTab === 'users' && (
+            <div className="space-y-3">
+              {apiUsers.map(u => (
+                <div key={u.id} className={`${card} border rounded-xl p-4`}>
+                  {editingUser === u.id ? (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={editForm.name} onChange={e=>setEditForm({...editForm,name:e.target.value})} placeholder="Name" className={`px-3 py-2 rounded-lg border text-sm ${input}`}/>
+                        <input value={editForm.username} onChange={e=>setEditForm({...editForm,username:e.target.value})} placeholder="Username" className={`px-3 py-2 rounded-lg border text-sm ${input}`}/>
+                        <input value={editForm.password} onChange={e=>setEditForm({...editForm,password:e.target.value})} placeholder="New Password (blank=keep)" type="password" className={`px-3 py-2 rounded-lg border text-sm ${input}`}/>
+                        <input value={editForm.dept} onChange={e=>setEditForm({...editForm,dept:e.target.value})} placeholder="Department" className={`px-3 py-2 rounded-lg border text-sm ${input}`}/>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={()=>handleSaveUser(u)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg smooth">Save</button>
+                        <button onClick={()=>setEditingUser(null)} className={`px-4 py-2 text-sm rounded-lg smooth ${darkMode?'bg-slate-700 text-slate-300':'bg-slate-200 text-slate-700'}`}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-full overflow-hidden bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shrink-0">
+                        {u.avatar ? <img src={u.avatar} alt={u.name} className="w-full h-full object-cover"/> : <span className="text-white font-bold text-lg">{(u.name||'?')[0]}</span>}
+                      </div>
+                      <div className="flex-1">
+                        <p className={`font-semibold ${text}`}>{u.name}</p>
+                        <p className={`text-xs ${sub}`}>{u.role==='admin'?'👑 Admin':'👤 User'} · {u.dept||''}</p>
+                        <p className={`text-xs ${sub}`}>{u.email||''} · @{u.username}</p>
+                      </div>
+                      <button onClick={()=>handleEditUser(u)} className={`p-2 rounded-lg ${hover} ${sub} smooth`}><Icon.Edit/></button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'activity' && (
+            <div className="space-y-2">
+              {activities.length === 0 ? <p className={sub}>No activity yet</p> : activities.map(a => (
+                <div key={a.id} className={`${card} border rounded-xl px-4 py-3 flex items-center gap-3`}>
+                  <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shrink-0">
+                    <span className="text-white text-xs font-bold">{(a.user||'?')[0]}</span>
+                  </div>
+                  <div className="flex-1">
+                    <p className={`text-sm ${text}`}><strong>{a.user}</strong> {a.action}</p>
+                    <p className={`text-xs ${sub}`}>{new Date(a.time).toLocaleString()}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
@@ -1015,7 +1199,7 @@ function App() {
 
         {/* Bottom actions */}
         <div className={`p-2 border-t ${border} space-y-1`}>
-          <button onClick={async()=>{ try{await apiFetch("/auth/logout",{method:"POST"})}catch(e){} localStorage.removeItem("fv_token"); setIsLoggedIn(false); setUser(null); setUserFiles({}); setUserFolders({}); }}
+          <button onClick={async()=>{ try{await apiFetch('/auth/logout',{method:'POST'})}catch(e){} localStorage.removeItem('fv_token'); setIsLoggedIn(false); setUser(null); setUserFiles({}); setUserFolders({}); setUserTrash({}); }}
             className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg smooth text-sm ${darkMode?'text-red-400 hover:bg-red-600/10':'text-red-600 hover:bg-red-50'}`}>
             <Icon.LogOut/> {t.logout}
           </button>
@@ -1153,12 +1337,12 @@ function App() {
               </div>
             </div>
             <div className="p-4 flex items-center justify-center min-h-48 max-h-96 overflow-auto">
-              {modalData.file.type==='image' && modalData.file.dataUrl ? (
-                <img src={modalData.file.dataUrl} alt={modalData.file.name} className="max-w-full max-h-80 object-contain rounded-lg"/>
-              ) : modalData.file.type==='video' && modalData.file.dataUrl ? (
-                <video controls className="max-w-full max-h-80 rounded-lg"><source src={modalData.file.dataUrl}/></video>
-              ) : modalData.file.type==='pdf' && modalData.file.dataUrl ? (
-                <iframe src={modalData.file.dataUrl} className="w-full h-80 rounded-lg border-0"/>
+              {modalData.file.type==='image' && (modalData.file.dataUrl||modalData.file.file_url) ? (
+                <img src={modalData.file.dataUrl||modalData.file.file_url} alt={modalData.file.name} className="max-w-full max-h-80 object-contain rounded-lg"/>
+              ) : modalData.file.type==='video' && (modalData.file.dataUrl||modalData.file.file_url) ? (
+                <video controls className="max-w-full max-h-80 rounded-lg"><source src={modalData.file.dataUrl||modalData.file.file_url}/></video>
+              ) : modalData.file.type==='pdf' && (modalData.file.dataUrl||modalData.file.file_url) ? (
+                <iframe src={modalData.file.dataUrl||modalData.file.file_url} className="w-full h-80 rounded-lg border-0"/>
               ) : (
                 <div className="text-center">
                   <div className="text-6xl mb-3">{getFileIcon(modalData.file.type)}</div>
@@ -1270,7 +1454,7 @@ function FileCard({ file, darkMode, text, sub, card, hover, lang, viewMode, onDe
         ) : file.type==='video' && file.dataUrl ? (
           <span className="text-xl">🎬</span>
         ) : (
-          <span className="text-xl">{getFileIcon(file.type)}</span>
+          <span className="text-xl" style={{color:getFileColor(file.type,file.name)}}>{getFileIcon(file.type,file.name)}</span>
         )}
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium truncate ${text}`}>{file.name}</p>
@@ -1290,15 +1474,15 @@ function FileCard({ file, darkMode, text, sub, card, hover, lang, viewMode, onDe
     <div className={`${card} border rounded-xl p-3 group ${hover} smooth relative`}>
       {file.isPrivate && <span className="absolute top-2 right-2 text-red-400 locked-badge text-sm">🔒</span>}
       {/* Thumbnail */}
-      {!file.isPrivate && file.type==='image' && file.dataUrl ? (
-        <img src={file.dataUrl} alt={file.name} className="thumbnail-img cursor-pointer" onClick={onPreview}/>
-      ) : !file.isPrivate && file.type==='video' && file.dataUrl ? (
+      {!file.isPrivate && file.type==='image' && (file.dataUrl||file.file_url) ? (
+        <img src={file.dataUrl||file.file_url} alt={file.name} className="thumbnail-img cursor-pointer" onClick={onPreview}/>
+      ) : !file.isPrivate && file.type==='video' && (file.dataUrl||file.file_url) ? (
         <video className="thumbnail-vid" onClick={onPreview} style={{cursor:'pointer'}}>
-          <source src={file.dataUrl}/>
+          <source src={file.dataUrl||file.file_url}/>
         </video>
       ) : (
         <div className="text-3xl text-center mb-2 cursor-pointer" onClick={onPreview}>
-          {file.isPrivate ? '🔒' : getFileIcon(file.type)}
+          {file.isPrivate ? '🔒' : getFileIcon(file.type,file.name)}
         </div>
       )}
       <p className={`text-xs font-medium truncate mb-1 ${text}`}>{file.name}</p>
