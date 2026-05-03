@@ -4,78 +4,12 @@ const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const cors = require('cors');
 const fs = require('fs');
-const cloudinary = require('cloudinary').v2;
-const { Readable } = require('stream');
-const crypto = require('crypto');
-
-// Simple JWT implementation
-const JWT_SECRET = process.env.JWT_SECRET || 'filevault-secret-2024-xK9mP3qR';
-const signToken = (payload) => {
-    const header = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
-    const body = Buffer.from(JSON.stringify({...payload, iat: Date.now()})).toString('base64url');
-    const sig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-    return `${header}.${body}.${sig}`;
-};
-const verifyToken = (token) => {
-    try {
-        const [header, body, sig] = token.split('.');
-        const expected = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
-        if (sig !== expected) return null;
-        return JSON.parse(Buffer.from(body, 'base64url').toString());
-    } catch { return null; }
-};
-
-// Rate limiter (simple in-memory)
-const rateLimits = new Map();
-const rateLimit = (maxReq, windowMs) => (req, res, next) => {
-    const key = req.ip;
-    const now = Date.now();
-    const data = rateLimits.get(key) || { count: 0, start: now };
-    if (now - data.start > windowMs) { data.count = 0; data.start = now; }
-    data.count++;
-    rateLimits.set(key, data);
-    if (data.count > maxReq) return res.status(429).json({ message: 'Too many requests, please wait.' });
-    next();
-};
-
-// Auth middleware
-const authMiddleware = (req, res, next) => {
-    const auth = req.headers.authorization;
-    if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ message: 'Unauthorized' });
-    const payload = verifyToken(auth.split(' ')[1]);
-    if (!payload) return res.status(401).json({ message: 'Invalid or expired token' });
-    req.userId = payload.id;
-    req.userRole = payload.role;
-    next();
-};
-
-// Cloudinary config
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'debxadxsr',
-    api_key: process.env.CLOUDINARY_API_KEY || '786599253482319',
-    api_secret: process.env.CLOUDINARY_API_SECRET || '4ZDG7pboBDuMvQ53SOYkBuJ36cI',
-});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors({
-    origin: (origin, callback) => {
-        const allowed = [
-            'https://filevault-pro.netlify.app',
-            'https://dancing-hotteok-8c0bc9.netlify.app',
-            'https://incomparable-naiad-5652c7.netlify.app',
-        ];
-        // Allow localhost and null (file://) in development
-        if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') || allowed.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(null, true); // Allow all for now - tighten in production
-        }
-    },
-    credentials: true,
-}));
+app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
@@ -110,13 +44,8 @@ db.serialize(() => {
         icon TEXT DEFAULT '📁',
         quota INTEGER DEFAULT 5368709120,
         used INTEGER DEFAULT 0,
-        parent_id INTEGER DEFAULT NULL,
-        user_id INTEGER DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
-    // Force add columns if missing (safe - errors ignored)
-    db.run(`ALTER TABLE folders ADD COLUMN parent_id INTEGER DEFAULT NULL`, () => {});
-    db.run(`ALTER TABLE folders ADD COLUMN user_id INTEGER DEFAULT NULL`, () => {});
 
     // Files table
     db.run(`CREATE TABLE IF NOT EXISTS files (
@@ -126,20 +55,14 @@ db.serialize(() => {
         size TEXT NOT NULL,
         size_bytes INTEGER NOT NULL,
         folder_id INTEGER,
-        user_id INTEGER,
         date TEXT NOT NULL,
         uploaded_by TEXT NOT NULL,
         is_favorite BOOLEAN DEFAULT 0,
         version INTEGER DEFAULT 1,
-        file_path TEXT,
-        file_url TEXT,
+        file_path TEXT NOT NULL,
         deleted_at DATETIME,
         FOREIGN KEY (folder_id) REFERENCES folders (id)
     )`);
-    // Add user_id and parent_id columns if not exist (migration)
-    db.run(`ALTER TABLE files ADD COLUMN user_id INTEGER`, () => {});
-    db.run(`ALTER TABLE folders ADD COLUMN user_id INTEGER`, () => {});
-    db.run(`ALTER TABLE folders ADD COLUMN parent_id INTEGER`, () => {});
 
     // File versions table
     db.run(`CREATE TABLE IF NOT EXISTS file_versions (
@@ -198,22 +121,23 @@ db.serialize(() => {
     });
 });
 
-// Multer - memory storage (upload to Cloudinary)
-const upload = multer({ 
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 100 * 1024 * 1024 }
+// Multer configuration for file uploads
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, 'uploads/');
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + '-' + file.originalname);
+    }
 });
 
-// Upload buffer to Cloudinary
-const uploadToCloudinary = (buffer, filename) => {
-    return new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-            { resource_type: 'auto', public_id: `filevault/${Date.now()}-${filename}` },
-            (error, result) => { if (error) reject(error); else resolve(result); }
-        );
-        Readable.from(buffer).pipe(stream);
-    });
-};
+const upload = multer({ 
+    storage: storage,
+    limits: {
+        fileSize: 100 * 1024 * 1024 // 100MB limit
+    }
+});
 
 // Helper function to format file size
 function formatFileSize(bytes) {
@@ -243,8 +167,8 @@ app.get('/', (req, res) => {
 
 // ===== AUTH ROUTES =====
 
-// Login (rate limited: 10 attempts per minute)
-app.post('/api/auth/login', rateLimit(10, 60000), (req, res) => {
+// Login
+app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     if (!username) return res.status(400).json({ message: 'Username is required' });
 
@@ -263,9 +187,8 @@ app.post('/api/auth/login', rateLimit(10, 60000), (req, res) => {
         // Log activity
         db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [user.name, 'logged in']);
 
-        const token = signToken({ id: user.id, username: user.username, role: user.role });
         res.json({
-            token,
+            token: Buffer.from(`${user.id}:${user.username}:${Date.now()}`).toString('base64'),
             user: {
                 id: user.id,
                 name: user.name,
@@ -295,46 +218,43 @@ app.get('/api/users', (req, res) => {
     });
 });
 
-// Get all folders with file counts (filter by user_id)
+// Get all folders with file counts
 app.get('/api/folders', (req, res) => {
-    const { userId } = req.query;
-    let query = `
+    db.all(`
         SELECT f.*, 
-               f.parent_id,
                COUNT(fl.id) as file_count,
                COALESCE(SUM(fl.size_bytes), 0) as used
         FROM folders f
         LEFT JOIN files fl ON f.id = fl.folder_id AND fl.deleted_at IS NULL
-    `;
-    const params = [];
-    if (userId) {
-        query += ` WHERE f.user_id = ?`;
-        params.push(userId);
-    }
-    query += ` GROUP BY f.id`;
-
-    db.all(query, params, (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        const folders = rows.map(f => ({
-            ...f,
-            parent_id: f.parent_id !== undefined ? f.parent_id : null,
-            parentId: f.parent_id !== undefined ? f.parent_id : null,
-        }));
-        res.json({ folders });
+        GROUP BY f.id
+    `, (err, rows) => {
+        if (err) {
+            res.status(500).json({ error: err.message });
+            return;
+        }
+        res.json(rows);
     });
 });
 
-// Get all files (filtered by userId)
+// Get all files (with optional folder filter)
 app.get('/api/files', (req, res) => {
-    const { folder_id, userId } = req.query;
+    const folderId = req.query.folder_id;
     let query = "SELECT * FROM files WHERE deleted_at IS NULL";
     let params = [];
-    if (userId) { query += " AND user_id = ?"; params.push(userId); }
-    if (folder_id) { query += " AND folder_id = ?"; params.push(folder_id); }
+
+    if (folderId) {
+        query += " AND folder_id = ?";
+        params.push(folderId);
+    }
+
     query += " ORDER BY date DESC";
+
     db.all(query, params, (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ files: rows });
+        if (err) {
+            res.status(500).json({ error: err.message });
+            return;
+        }
+        res.json(rows);
     });
 });
 
@@ -349,41 +269,65 @@ app.get('/api/files/:id/versions', (req, res) => {
     });
 });
 
-// Upload file → Cloudinary
-app.post('/api/files/upload', upload.single('file'), async (req, res) => {
+// Upload file (supports multipart OR JSON with dataUrl)
+app.post('/api/files/upload', (req, res, next) => {
+    // If JSON body with dataUrl, skip multer
+    if (req.is('application/json')) return next();
+    upload.single('file')(req, res, next);
+}, (req, res) => {
+    // JSON upload (dataUrl from frontend)
+    if (req.is('application/json')) {
+        const { name, type, size, folderId, userId, dataUrl } = req.body;
+        if (!name) return res.status(400).json({ error: 'No file data' });
+
+        // Save dataUrl as file on disk
+        const filename = Date.now() + '-' + name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const filePath = path.join('uploads', filename);
+        let sizeBytes = 0;
+
+        try {
+            if (dataUrl && dataUrl.includes(',')) {
+                const base64Data = dataUrl.split(',')[1];
+                const buffer = Buffer.from(base64Data, 'base64');
+                sizeBytes = buffer.length;
+                fs.writeFileSync(filePath, buffer);
+            }
+        } catch(e) { console.warn('Could not save dataUrl to disk:', e.message); }
+
+        db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, date, uploaded_by, file_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [name, type || 'document', size || '0 B', sizeBytes, folderId || null,
+             new Date().toISOString().split('T')[0], userId ? String(userId) : 'Unknown', filePath],
+            function(err) {
+                if (err) return res.status(500).json({ error: err.message });
+                db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [String(userId||'user'), `uploaded "${name}"`]);
+                res.json({ id: this.lastID, name, type, size, folderId, is_favorite: false, version: 1 });
+            }
+        );
+        return;
+    }
+
+    // Multipart upload
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const { folder_id, uploaded_by } = req.body;
     const file = req.file;
-    try {
-        // Upload to Cloudinary
-        const cloudResult = await uploadToCloudinary(file.buffer, file.originalname);
-        const fileInfo = {
-            name: file.originalname,
-            type: getFileType(file.originalname),
-            size: formatFileSize(file.size),
-            size_bytes: file.size,
-            folder_id: folder_id || null,
-            date: new Date().toISOString().split('T')[0],
-            uploaded_by: uploaded_by || 'Unknown',
-            file_url: cloudResult.secure_url,
-            file_path: cloudResult.public_id,
-        };
-        const uploadUserId = req.body.userId || req.body.user_id || null;
-        db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, user_id, date, uploaded_by, file_path, file_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [fileInfo.name, fileInfo.type, fileInfo.size, fileInfo.size_bytes,
-             fileInfo.folder_id, uploadUserId, fileInfo.date, fileInfo.uploaded_by, fileInfo.file_path, fileInfo.file_url],
-            function(err) {
-                if (err) return res.status(500).json({ error: err.message });
-                db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [fileInfo.uploaded_by, `uploaded "${fileInfo.name}"`]);
-                if (fileInfo.folder_id) db.run("UPDATE folders SET used = used + ? WHERE id = ?", [fileInfo.size_bytes, fileInfo.folder_id]);
-                res.json({ id: this.lastID, ...fileInfo, is_favorite: false, version: 1 });
-            }
-        );
-    } catch(e) {
-        console.error('Cloudinary upload error:', e);
-        res.status(500).json({ error: 'Upload failed: ' + e.message });
-    }
+    const fileInfo = {
+        name: file.originalname, type: getFileType(file.originalname),
+        size: formatFileSize(file.size), size_bytes: file.size,
+        folder_id: folder_id || null, date: new Date().toISOString().split('T')[0],
+        uploaded_by: uploaded_by || 'Unknown', file_path: file.path
+    };
+    db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, date, uploaded_by, file_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [fileInfo.name, fileInfo.type, fileInfo.size, fileInfo.size_bytes,
+         fileInfo.folder_id, fileInfo.date, fileInfo.uploaded_by, fileInfo.file_path],
+        function(err) {
+            if (err) return res.status(500).json({ error: err.message });
+            db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [fileInfo.uploaded_by, `uploaded "${fileInfo.name}"`]);
+            if (fileInfo.folder_id) db.run("UPDATE folders SET used = used + ? WHERE id = ?", [fileInfo.size_bytes, fileInfo.folder_id]);
+            res.json({ id: this.lastID, ...fileInfo, is_favorite: false, version: 1 });
+        }
+    );
 });
 
 // Delete file via DELETE method (used by frontend)
@@ -426,41 +370,14 @@ app.post('/api/files/:id/trash', (req, res) => {
     });
 });
 
-// Get trash files (filtered by userId)
+// Get trash files
 app.get('/api/trash', (req, res) => {
-    const { userId } = req.query;
-    let query = "SELECT * FROM files WHERE deleted_at IS NOT NULL";
-    let params = [];
-    if (userId) { query += " AND user_id = ?"; params.push(userId); }
-    query += " ORDER BY deleted_at DESC";
-    db.all(query, params, (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ files: rows });
-    });
-});
-
-// Restore file from trash
-app.post('/api/files/:id/restore', (req, res) => {
-    db.run("UPDATE files SET deleted_at = NULL WHERE id = ?", [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [req.body.user||'user', `restored file`]);
-        res.json({ message: 'File restored' });
-    });
-});
-
-// Rename file
-app.patch('/api/files/:id/rename', (req, res) => {
-    db.run("UPDATE files SET name = ? WHERE id = ?", [req.body.name, req.params.id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Renamed' });
-    });
-});
-
-// Rename folder
-app.patch('/api/folders/:id/rename', (req, res) => {
-    db.run("UPDATE folders SET name = ? WHERE id = ?", [req.body.name, req.params.id], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Renamed' });
+    db.all("SELECT * FROM files WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC", (err, rows) => {
+        if (err) {
+            res.status(500).json({ error: err.message });
+            return;
+        }
+        res.json(rows);
     });
 });
 
@@ -500,19 +417,17 @@ app.get('/api/activities', (req, res) => {
 
 // Create folder
 app.post('/api/folders', (req, res) => {
-    const { name, color, icon, quota, parentId, parent_id, userId } = req.body;
-    const pId = parentId || parent_id || null;
-    const uId = userId || null;
+    const { name, color, icon, quota } = req.body;
     
     db.run(`
-        INSERT INTO folders (name, color, icon, quota, parent_id, user_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `, [name, color || '#3B82F6', icon || '📁', quota || 5368709120, pId, uId], function(err) {
+        INSERT INTO folders (name, color, icon, quota)
+        VALUES (?, ?, ?, ?)
+    `, [name, color || '#3B82F6', icon || '📁', quota || 5368709120], function(err) {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
         }
-        res.json({ id: this.lastID, name, color, icon, quota, parent_id: pId, parentId: pId, user_id: uId, used: 0 });
+        res.json({ id: this.lastID, name, color, icon, quota, used: 0 });
     });
 });
 
@@ -527,47 +442,6 @@ app.delete('/api/folders/:id', (req, res) => {
         }
         res.json({ message: 'Folder deleted' });
     });
-});
-
-// Edit user (admin only)
-app.patch('/api/users/:id', (req, res) => {
-    const { name, username, password, dept, email } = req.body;
-    const updates = [];
-    const params = [];
-    if (name) { updates.push('name = ?'); params.push(name); }
-    if (username) { updates.push('username = ?'); params.push(username); }
-    if (password) { updates.push('password = ?'); params.push(password); }
-    if (dept !== undefined) { updates.push('dept = ?'); params.push(dept); }
-    if (email !== undefined) { updates.push('email = ?'); params.push(email); }
-    if (updates.length === 0) return res.json({ message: 'No changes' });
-    params.push(req.params.id);
-    db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'User updated' });
-    });
-});
-
-// Permanent delete file
-app.delete('/api/files/:id/permanent', (req, res) => {
-    db.get("SELECT * FROM files WHERE id = ?", [req.params.id], (err, file) => {
-        if (err || !file) return res.status(404).json({ error: 'File not found' });
-        // Delete from Cloudinary if has path
-        if (file.file_path) {
-            cloudinary.uploader.destroy(file.file_path, { resource_type: 'auto' }).catch(()=>{});
-        }
-        db.run("DELETE FROM files WHERE id = ?", [req.params.id], (err) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ message: 'File permanently deleted' });
-        });
-    });
-});
-
-// Security headers middleware
-app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
-    next();
 });
 
 // Start server
