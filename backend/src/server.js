@@ -6,6 +6,48 @@ const cors = require('cors');
 const fs = require('fs');
 const cloudinary = require('cloudinary').v2;
 const { Readable } = require('stream');
+const crypto = require('crypto');
+
+// Simple JWT implementation
+const JWT_SECRET = process.env.JWT_SECRET || 'filevault-secret-2024-xK9mP3qR';
+const signToken = (payload) => {
+    const header = Buffer.from(JSON.stringify({alg:'HS256',typ:'JWT'})).toString('base64url');
+    const body = Buffer.from(JSON.stringify({...payload, iat: Date.now()})).toString('base64url');
+    const sig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    return `${header}.${body}.${sig}`;
+};
+const verifyToken = (token) => {
+    try {
+        const [header, body, sig] = token.split('.');
+        const expected = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+        if (sig !== expected) return null;
+        return JSON.parse(Buffer.from(body, 'base64url').toString());
+    } catch { return null; }
+};
+
+// Rate limiter (simple in-memory)
+const rateLimits = new Map();
+const rateLimit = (maxReq, windowMs) => (req, res, next) => {
+    const key = req.ip;
+    const now = Date.now();
+    const data = rateLimits.get(key) || { count: 0, start: now };
+    if (now - data.start > windowMs) { data.count = 0; data.start = now; }
+    data.count++;
+    rateLimits.set(key, data);
+    if (data.count > maxReq) return res.status(429).json({ message: 'Too many requests, please wait.' });
+    next();
+};
+
+// Auth middleware
+const authMiddleware = (req, res, next) => {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ message: 'Unauthorized' });
+    const payload = verifyToken(auth.split(' ')[1]);
+    if (!payload) return res.status(401).json({ message: 'Invalid or expired token' });
+    req.userId = payload.id;
+    req.userRole = payload.role;
+    next();
+};
 
 // Cloudinary config
 cloudinary.config({
@@ -18,7 +60,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: ['https://filevault-pro.netlify.app', 'https://dancing-hotteok-8c0bc9.netlify.app', 'https://incomparable-naiad-5652c7.netlify.app', 'http://localhost:5500', 'http://127.0.0.1:5500'],
+    credentials: true,
+}));
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
@@ -53,8 +98,13 @@ db.serialize(() => {
         icon TEXT DEFAULT '📁',
         quota INTEGER DEFAULT 5368709120,
         used INTEGER DEFAULT 0,
+        parent_id INTEGER DEFAULT NULL,
+        user_id INTEGER DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+    // Force add columns if missing (safe - errors ignored)
+    db.run(`ALTER TABLE folders ADD COLUMN parent_id INTEGER DEFAULT NULL`, () => {});
+    db.run(`ALTER TABLE folders ADD COLUMN user_id INTEGER DEFAULT NULL`, () => {});
 
     // Files table
     db.run(`CREATE TABLE IF NOT EXISTS files (
@@ -64,6 +114,7 @@ db.serialize(() => {
         size TEXT NOT NULL,
         size_bytes INTEGER NOT NULL,
         folder_id INTEGER,
+        user_id INTEGER,
         date TEXT NOT NULL,
         uploaded_by TEXT NOT NULL,
         is_favorite BOOLEAN DEFAULT 0,
@@ -73,6 +124,10 @@ db.serialize(() => {
         deleted_at DATETIME,
         FOREIGN KEY (folder_id) REFERENCES folders (id)
     )`);
+    // Add user_id and parent_id columns if not exist (migration)
+    db.run(`ALTER TABLE files ADD COLUMN user_id INTEGER`, () => {});
+    db.run(`ALTER TABLE folders ADD COLUMN user_id INTEGER`, () => {});
+    db.run(`ALTER TABLE folders ADD COLUMN parent_id INTEGER`, () => {});
 
     // File versions table
     db.run(`CREATE TABLE IF NOT EXISTS file_versions (
@@ -176,8 +231,8 @@ app.get('/', (req, res) => {
 
 // ===== AUTH ROUTES =====
 
-// Login
-app.post('/api/auth/login', (req, res) => {
+// Login (rate limited: 10 attempts per minute)
+app.post('/api/auth/login', rateLimit(10, 60000), (req, res) => {
     const { username, password } = req.body;
     if (!username) return res.status(400).json({ message: 'Username is required' });
 
@@ -196,8 +251,9 @@ app.post('/api/auth/login', (req, res) => {
         // Log activity
         db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [user.name, 'logged in']);
 
+        const token = signToken({ id: user.id, username: user.username, role: user.role });
         res.json({
-            token: Buffer.from(`${user.id}:${user.username}:${Date.now()}`).toString('base64'),
+            token,
             user: {
                 id: user.id,
                 name: user.name,
@@ -227,29 +283,41 @@ app.get('/api/users', (req, res) => {
     });
 });
 
-// Get all folders with file counts (supports userId filter)
+// Get all folders with file counts (filter by user_id)
 app.get('/api/folders', (req, res) => {
-    db.all(`
+    const { userId } = req.query;
+    let query = `
         SELECT f.*, 
                f.parent_id,
                COUNT(fl.id) as file_count,
                COALESCE(SUM(fl.size_bytes), 0) as used
         FROM folders f
         LEFT JOIN files fl ON f.id = fl.folder_id AND fl.deleted_at IS NULL
-        GROUP BY f.id
-    `, (err, rows) => {
+    `;
+    const params = [];
+    if (userId) {
+        query += ` WHERE f.user_id = ?`;
+        params.push(userId);
+    }
+    query += ` GROUP BY f.id`;
+
+    db.all(query, params, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
-        // Ensure parent_id is included
-        const folders = rows.map(f => ({ ...f, parentId: f.parent_id || null }));
+        const folders = rows.map(f => ({
+            ...f,
+            parent_id: f.parent_id !== undefined ? f.parent_id : null,
+            parentId: f.parent_id !== undefined ? f.parent_id : null,
+        }));
         res.json({ folders });
     });
 });
 
-// Get all files (with optional folder/userId filter)
+// Get all files (filtered by userId)
 app.get('/api/files', (req, res) => {
     const { folder_id, userId } = req.query;
     let query = "SELECT * FROM files WHERE deleted_at IS NULL";
     let params = [];
+    if (userId) { query += " AND user_id = ?"; params.push(userId); }
     if (folder_id) { query += " AND folder_id = ?"; params.push(folder_id); }
     query += " ORDER BY date DESC";
     db.all(query, params, (err, rows) => {
@@ -288,10 +356,11 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
             file_url: cloudResult.secure_url,
             file_path: cloudResult.public_id,
         };
-        db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, date, uploaded_by, file_path, file_url)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        const uploadUserId = req.body.userId || req.body.user_id || null;
+        db.run(`INSERT INTO files (name, type, size, size_bytes, folder_id, user_id, date, uploaded_by, file_path, file_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [fileInfo.name, fileInfo.type, fileInfo.size, fileInfo.size_bytes,
-             fileInfo.folder_id, fileInfo.date, fileInfo.uploaded_by, fileInfo.file_path, fileInfo.file_url],
+             fileInfo.folder_id, uploadUserId, fileInfo.date, fileInfo.uploaded_by, fileInfo.file_path, fileInfo.file_url],
             function(err) {
                 if (err) return res.status(500).json({ error: err.message });
                 db.run("INSERT INTO activities (user, action) VALUES (?, ?)", [fileInfo.uploaded_by, `uploaded "${fileInfo.name}"`]);
@@ -345,9 +414,14 @@ app.post('/api/files/:id/trash', (req, res) => {
     });
 });
 
-// Get trash files (supports userId filter)
+// Get trash files (filtered by userId)
 app.get('/api/trash', (req, res) => {
-    db.all("SELECT * FROM files WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC", (err, rows) => {
+    const { userId } = req.query;
+    let query = "SELECT * FROM files WHERE deleted_at IS NOT NULL";
+    let params = [];
+    if (userId) { query += " AND user_id = ?"; params.push(userId); }
+    query += " ORDER BY deleted_at DESC";
+    db.all(query, params, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ files: rows });
     });
@@ -414,21 +488,19 @@ app.get('/api/activities', (req, res) => {
 
 // Create folder
 app.post('/api/folders', (req, res) => {
-    const { name, color, icon, quota, parentId, parent_id } = req.body;
+    const { name, color, icon, quota, parentId, parent_id, userId } = req.body;
     const pId = parentId || parent_id || null;
-    
-    // Add parent_id column if not exists
-    db.run(`ALTER TABLE folders ADD COLUMN parent_id INTEGER`, () => {});
+    const uId = userId || null;
     
     db.run(`
-        INSERT INTO folders (name, color, icon, quota, parent_id)
-        VALUES (?, ?, ?, ?, ?)
-    `, [name, color || '#3B82F6', icon || '📁', quota || 5368709120, pId], function(err) {
+        INSERT INTO folders (name, color, icon, quota, parent_id, user_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `, [name, color || '#3B82F6', icon || '📁', quota || 5368709120, pId, uId], function(err) {
         if (err) {
             res.status(500).json({ error: err.message });
             return;
         }
-        res.json({ id: this.lastID, name, color, icon, quota, parent_id: pId, parentId: pId, used: 0 });
+        res.json({ id: this.lastID, name, color, icon, quota, parent_id: pId, parentId: pId, user_id: uId, used: 0 });
     });
 });
 
@@ -443,6 +515,47 @@ app.delete('/api/folders/:id', (req, res) => {
         }
         res.json({ message: 'Folder deleted' });
     });
+});
+
+// Edit user (admin only)
+app.patch('/api/users/:id', (req, res) => {
+    const { name, username, password, dept, email } = req.body;
+    const updates = [];
+    const params = [];
+    if (name) { updates.push('name = ?'); params.push(name); }
+    if (username) { updates.push('username = ?'); params.push(username); }
+    if (password) { updates.push('password = ?'); params.push(password); }
+    if (dept !== undefined) { updates.push('dept = ?'); params.push(dept); }
+    if (email !== undefined) { updates.push('email = ?'); params.push(email); }
+    if (updates.length === 0) return res.json({ message: 'No changes' });
+    params.push(req.params.id);
+    db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ message: 'User updated' });
+    });
+});
+
+// Permanent delete file
+app.delete('/api/files/:id/permanent', (req, res) => {
+    db.get("SELECT * FROM files WHERE id = ?", [req.params.id], (err, file) => {
+        if (err || !file) return res.status(404).json({ error: 'File not found' });
+        // Delete from Cloudinary if has path
+        if (file.file_path) {
+            cloudinary.uploader.destroy(file.file_path, { resource_type: 'auto' }).catch(()=>{});
+        }
+        db.run("DELETE FROM files WHERE id = ?", [req.params.id], (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: 'File permanently deleted' });
+        });
+    });
+});
+
+// Security headers middleware
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
 });
 
 // Start server
