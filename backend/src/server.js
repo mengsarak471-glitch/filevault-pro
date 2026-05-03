@@ -563,6 +563,11 @@ app.use((req, res, next) => {
     next();
 });
 
+// 404 handler
+app.use((req, res) => {
+    res.status(404).json({ message: 'Not found' });
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`FileVault Pro server running on http://localhost:${PORT}`);
