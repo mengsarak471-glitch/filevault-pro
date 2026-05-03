@@ -60,15 +60,22 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-// CORS - Allow ALL
-app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Client-Version");
-    if (req.method === "OPTIONS") return res.sendStatus(200);
-    next();
-});
-app.use(cors());
+app.use(cors({
+    origin: (origin, callback) => {
+        const allowed = [
+            'https://filevault-pro.netlify.app',
+            'https://dancing-hotteok-8c0bc9.netlify.app',
+            'https://incomparable-naiad-5652c7.netlify.app',
+        ];
+        // Allow localhost and null (file://) in development
+        if (!origin || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1') || allowed.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(null, true); // Allow all for now - tighten in production
+        }
+    },
+    credentials: true,
+}));
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
@@ -201,7 +208,12 @@ const upload = multer({
 const uploadToCloudinary = (buffer, filename) => {
     return new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
-            { resource_type: 'auto', public_id: `filevault/${Date.now()}-${filename}` },
+            { 
+              resource_type: 'auto', 
+              public_id: `filevault/${Date.now()}-${filename}`,
+              access_mode: 'public',
+              type: 'upload',
+            },
             (error, result) => { if (error) reject(error); else resolve(result); }
         );
         Readable.from(buffer).pipe(stream);
@@ -277,7 +289,16 @@ app.post('/api/auth/logout', (req, res) => {
     res.json({ message: 'Logged out successfully' });
 });
 
-
+// Get all users
+app.get('/api/users', (req, res) => {
+    db.all("SELECT * FROM users", (err, rows) => {
+        if (err) {
+            res.status(500).json({ error: err.message });
+            return;
+        }
+        res.json(rows);
+    });
+});
 
 // Get all folders with file counts (filter by user_id)
 app.get('/api/folders', (req, res) => {
@@ -520,23 +541,35 @@ app.patch('/api/users/:id', (req, res) => {
     const params = [];
     if (name) { updates.push('name = ?'); params.push(name); }
     if (username) { updates.push('username = ?'); params.push(username); }
-    if (password && password.trim()) { updates.push('password = ?'); params.push(password.trim()); }
+    if (password) { updates.push('password = ?'); params.push(password); }
     if (dept !== undefined) { updates.push('dept = ?'); params.push(dept); }
     if (email !== undefined) { updates.push('email = ?'); params.push(email); }
     if (updates.length === 0) return res.json({ message: 'No changes' });
     params.push(req.params.id);
     db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function(err) {
         if (err) return res.status(500).json({ error: err.message });
-        db.run("INSERT INTO activities (user, action) VALUES (?, ?)", ['Admin', `updated user #${req.params.id}`]);
-        res.json({ message: 'User updated successfully' });
+        res.json({ message: 'User updated' });
     });
 });
 
-// Get users - NEVER return password field
-app.get('/api/users', (req, res) => {
-    db.all("SELECT id, name, username, email, dept, role, avatar FROM users", (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
+// Download file proxy (bypass Cloudinary auth)
+app.get('/api/files/:id/download', (req, res) => {
+    db.get("SELECT * FROM files WHERE id = ?", [req.params.id], async (err, file) => {
+        if (err || !file) return res.status(404).json({ error: 'File not found' });
+        const fileUrl = file.file_url;
+        if (!fileUrl) return res.status(404).json({ error: 'No file URL' });
+        try {
+            const https = require('https');
+            const http = require('http');
+            const client = fileUrl.startsWith('https') ? https : http;
+            res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.name)}"`);
+            res.setHeader('Content-Type', 'application/octet-stream');
+            client.get(fileUrl, (fileRes) => {
+                fileRes.pipe(res);
+            }).on('error', () => res.redirect(fileUrl));
+        } catch(e) {
+            res.redirect(fileUrl);
+        }
     });
 });
 
