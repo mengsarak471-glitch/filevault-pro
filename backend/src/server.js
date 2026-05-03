@@ -277,16 +277,7 @@ app.post('/api/auth/logout', (req, res) => {
     res.json({ message: 'Logged out successfully' });
 });
 
-// Get all users
-app.get('/api/users', (req, res) => {
-    db.all("SELECT * FROM users", (err, rows) => {
-        if (err) {
-            res.status(500).json({ error: err.message });
-            return;
-        }
-        res.json(rows);
-    });
-});
+
 
 // Get all folders with file counts (filter by user_id)
 app.get('/api/folders', (req, res) => {
@@ -529,14 +520,23 @@ app.patch('/api/users/:id', (req, res) => {
     const params = [];
     if (name) { updates.push('name = ?'); params.push(name); }
     if (username) { updates.push('username = ?'); params.push(username); }
-    if (password) { updates.push('password = ?'); params.push(password); }
+    if (password && password.trim()) { updates.push('password = ?'); params.push(password.trim()); }
     if (dept !== undefined) { updates.push('dept = ?'); params.push(dept); }
     if (email !== undefined) { updates.push('email = ?'); params.push(email); }
     if (updates.length === 0) return res.json({ message: 'No changes' });
     params.push(req.params.id);
     db.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params, function(err) {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'User updated' });
+        db.run("INSERT INTO activities (user, action) VALUES (?, ?)", ['Admin', `updated user #${req.params.id}`]);
+        res.json({ message: 'User updated successfully' });
+    });
+});
+
+// Get users - NEVER return password field
+app.get('/api/users', (req, res) => {
+    db.all("SELECT id, name, username, email, dept, role, avatar FROM users", (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows);
     });
 });
 
@@ -561,11 +561,6 @@ app.use((req, res, next) => {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-XSS-Protection', '1; mode=block');
     next();
-});
-
-// 404 handler
-app.use((req, res) => {
-    res.status(404).json({ message: 'Not found' });
 });
 
 // Start server
